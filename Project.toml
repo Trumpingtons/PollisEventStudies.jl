@@ -1,6 +1,6 @@
 name = "PollisEventStudies"
 uuid = "5ed72046-19de-49b5-a33c-d4f6124ce44a"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Antonio Saragga Seabra"]
 
 [deps]

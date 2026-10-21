@@ -1,12 +1,19 @@
 # PollisEventStudies.jl
 
-Intraday event studies of SEC filings, on the study folders [Pollis](https://pollis.org) keeps in `~/.pollis/event-studies`.
+Intraday event studies of SEC filings and of the FOMC's releases, on the study folders [Pollis](https://pollis.org) keeps in `~/.pollis/event-studies`.
 
 Pollis captures the minute prices of each filer's stock and of a benchmark around the filings an alert fires. Each study folder holds:
 
 - `study.toml`: the benchmark, the model of normal returns (market-adjusted or the market model) and the periods, in minutes before and after the filing;
 - `events.csv`: the filings, with the time EDGAR accepted each (UTC) and the event's time (`event_time`: the earlier of the newswire release and the acceptance, or the acceptance alone, as `study.toml` says; the acceptance when the column is not there), whether the event came during the regular session and the next open after it;
 - `prices/`: a file per filing with the minute bars of the stock and of the benchmark.
+
+For the FOMC's releases (`source = "fomc"` in `study.toml`), Pollis captures the bars of the study's instruments around each release in the Federal Reserve's Monetary Policy Press Releases feed: federal funds futures (FF1 to FF4), SOFR futures (SR1, SFR1 to SFR5), the 2-year note future (ZT), the 5- and 10-year yields (FVX, TNX), TIPS and the S&P 500. The folder holds:
+
+- `study.toml`: the releases (statement, projections, minutes, other), the instruments and the periods, in minutes before and after the release;
+- `events.csv`: the releases, with their time (UTC) and the minutes each bar spans (1, or 5 for a release older than 30 days);
+- `instruments.csv`: for each release, each instrument's Yahoo Finance symbol (the contract months follow from the release's month), its unit and its scale;
+- `prices/`: a file per release with the bars of each symbol.
 
 ## Usage
 
@@ -31,6 +38,14 @@ For each period:
 - at the end of the period: the CAR's cross-sectional t, the Boehmer, Musumeci and Poulsen (1991) t on standardized CARs, and abnormal volume (regular-session minutes after the filing against those before it).
 
 Events still capturing prices count up to the last complete minute. The standardized CARs need the estimation days, which Pollis captures for the market model only.
+
+For each period of a study of FOMC releases:
+
+- each instrument's move from the start of the period to its end at each release (`moves`, a release a row): in basis points of the implied rate (100 less the price) for the federal funds and SOFR futures, of the yield for the yields, and in per cent (log) for prices; FF1's move is scaled by D / (D - d), D the days of the release's month and d its day (Kuttner 2001), and in the month's last week FF2's contract stands in for it, unscaled;
+- the mean move of each instrument with its cross-sectional t (`summary`);
+- the mean move a minute at a time from the release (`paths`, by instrument).
+
+`write_results` writes them to `<period>-moves.csv`, `<period>-summary.csv` and `<period>-paths.csv`.
 
 ## License
 
