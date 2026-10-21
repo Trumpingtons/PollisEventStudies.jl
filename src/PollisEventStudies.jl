@@ -30,7 +30,11 @@ struct Period
     next_open::Bool
 end
 
-"""A filing: when EDGAR accepted it (UTC), whether during the regular session, and the next open after it."""
+"""
+A filing: when EDGAR accepted it and the event's time (UTC), which is the earlier of the newswire release and the
+acceptance when the study takes the first public time; whether the event came during the regular session, and the
+next open after it.
+"""
 struct Event
     accession::String
     cik::String
@@ -38,6 +42,7 @@ struct Event
     ticker::String
     form::String
     accepted::DateTime
+    time::DateTime
     during_session::Union{Bool, Nothing}
     next_open::Union{DateTime, Nothing}
     complete::Bool
@@ -77,11 +82,15 @@ function read_study(folder::AbstractString = pwd())
     events = Event[]
     path = joinpath(folder, "events.csv")
     if isfile(path)
-        for row in Tables.rows(CSV.File(path; types = String))
+        file = CSV.File(path; types = String)
+        # An events.csv written before Pollis looked for newswire releases has no event_time: the acceptance is the event's time
+        has_time = :event_time in propertynames(file)
+        for row in Tables.rows(file)
             (ismissing(row.ticker) || ismissing(row.accepted)) && continue
             during = coalesce(row.during_session, "")
+            time = has_time && !ismissing(row.event_time) ? row.event_time : row.accepted
             push!(events, Event(row.accession, coalesce(row.cik, ""), coalesce(row.name, ""), row.ticker, coalesce(row.form, ""),
-                utc(row.accepted), during == "true" ? true : during == "false" ? false : nothing,
+                utc(row.accepted), utc(time), during == "true" ? true : during == "false" ? false : nothing,
                 ismissing(row.next_open) ? nothing : utc(row.next_open), coalesce(row.status, "") == "complete"))
         end
     end
@@ -148,7 +157,7 @@ function analyse_event(study::Study, period::Period, event::Event, now::DateTime
     prices = read_prices(study, event)
     stock, benchmark = get(prices, event.ticker, nothing), get(prices, study.benchmark, nothing)
     (stock === nothing || benchmark === nothing) && return nothing
-    start = event.accepted - Minute(period.before)
+    start = event.time - Minute(period.before)
     stock_start, benchmark_start = price_at(stock, start), price_at(benchmark, start)
     (stock_start === nothing || benchmark_start === nothing) && return nothing
 
@@ -165,19 +174,19 @@ function analyse_event(study::Study, period::Period, event::Event, now::DateTime
         100 * (log(price / stock_start) - normal)
     end
 
-    from_filing = Union{Missing, Float64}[car(event.accepted + Minute(m)) for m in -period.before:period.after]
+    from_filing = Union{Missing, Float64}[car(event.time + Minute(m)) for m in -period.before:period.after]
     follows_open = period.next_open && event.during_session === false && event.next_open !== nothing
     from_open = follows_open ? Union{Missing, Float64}[car(event.next_open + Minute(m)) for m in 0:period.after] : nothing
 
-    finish = event.accepted + Minute(period.after)
+    finish = event.time + Minute(period.after)
     scar = sigma === nothing || ismissing(from_filing[end]) ? missing :
         from_filing[end] / 100 / (sigma * sqrt(max(1, count_between(stock, start, finish))))
 
-    # The mean log(1 + volume) of the regular-session minutes after the filing, or after the next open, less that of
-    # the regular-session minutes before the filing
-    from = follows_open ? event.next_open : event.accepted
+    # The mean log(1 + volume) of the regular-session minutes after the event, or after the next open, less that of
+    # the regular-session minutes before the event
+    from = follows_open ? event.next_open : event.time
     window = [log1p(stock.volume[k]) for k in eachindex(stock.ends) if stock.regular[k] && from < stock.ends[k] <= min(from + Minute(period.after), known)]
-    baseline = [log1p(stock.volume[k]) for k in eachindex(stock.ends) if stock.regular[k] && stock.ends[k] <= event.accepted]
+    baseline = [log1p(stock.volume[k]) for k in eachindex(stock.ends) if stock.regular[k] && stock.ends[k] <= event.time]
     volume = isempty(window) || length(baseline) < MIN_VOLUME_MINUTES ? missing : mean(window) - mean(baseline)
 
     (accession = event.accession, ticker = event.ticker, name = event.name, from_filing = from_filing, from_open = from_open,

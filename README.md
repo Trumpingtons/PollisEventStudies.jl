@@ -5,7 +5,7 @@ Intraday event studies of SEC filings, on the study folders [Pollis](https://pol
 Pollis captures the minute prices of each filer's stock and of a benchmark around the filings an alert fires. Each study folder holds:
 
 - `study.toml`: the benchmark, the model of normal returns (market-adjusted or the market model) and the periods, in minutes before and after the filing;
-- `events.csv`: the filings, with the time EDGAR accepted each (UTC), whether it came in during the regular session and the next open after it;
+- `events.csv`: the filings, with the time EDGAR accepted each (UTC) and the event's time (`event_time`: the earlier of the newswire release and the acceptance, or the acceptance alone, as `study.toml` says; the acceptance when the column is not there), whether the event came during the regular session and the next open after it;
 - `prices/`: a file per filing with the minute bars of the stock and of the benchmark.
 
 ## Usage
