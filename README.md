@@ -35,9 +35,25 @@ write_results(results, "results")
 For each period:
 
 - the average abnormal return (AAR) and the cumulative average abnormal return (CAAR) a minute at a time, from the filing and, for filings outside the regular session, from the next open, each with its cross-sectional t;
-- at the end of the period: the CAR's cross-sectional t, the Boehmer, Musumeci and Poulsen (1991) t on standardized CARs, and abnormal volume (regular-session minutes after the filing against those before it).
+- at the end of the period: the CAR's cross-sectional t, the Boehmer, Musumeci and Poulsen (1991) t on standardized CARs, the same t adjusted for the correlation of the events' abnormal returns (Kolari and Pynn&ouml;nen 2010), the generalized rank test (Kolari and Pynn&ouml;nen 2011), and abnormal volume (regular-session minutes after the filing against those before it), each with its two-sided p-value.
 
-Events still capturing prices count up to the last complete minute. The standardized CARs need the estimation days, which Pollis captures for the market model only.
+A filing outside the regular session, in a period that follows the next open, is tested at the end of the period's minutes after the next open, where the market first trades on it. Events still capturing prices count up to the last complete minute. The standardized CARs need the estimation days, which Pollis captures for the market model only.
+
+The adjustment for cross-correlation multiplies the BMP t by sqrt((1 - r) / (1 + (n - 1) r)), r the mean correlation over all pairs of the n events: the correlation of a pair's standardized abnormal returns over the estimation minutes they share when their periods overlap, and zero when they do not. The generalized rank test ranks each event's standardized CAR, scaled by the CARs' cross-sectional standard deviation, among its standardized abnormal returns on the estimation days. The p-values come from Student's t distribution, through [Distributions.jl](https://github.com/JuliaStats/Distributions.jl).
+
+The same for groups of the events, with `group_by = "form"`, `"item"` (each 8-K item; a filing with several is in the group of each), `"session"` (during the regular session or outside it), `"ticker"`, or a function of the event that gives a group's name or several, in `study.toml` or as a keyword:
+
+```julia
+results = analyse(study; group_by = "item")
+results[1].groups                      # each with its name, events, AAR and CAAR, and tests
+run_study("path/to/study"; group_by = event -> event.form == "8-K" ? "8-K" : "Other")
+```
+
+`write_results` then also writes `<period>-groups.csv` (a group a row) and the groups' AAR and CAAR, each row with its group.
+
+A stock that does not trade every minute has no bar in the minutes it did not trade in. The market model's returns are measured from one trade to the next, against the benchmark's move over the same minutes, and weighed by the minutes they span; a return of zero in each minute without a trade would bias beta towards zero. The standardized CAR's variance counts every minute of the regular session in the period, whether the stock traded in it or not.
+
+Grouping the events and the treatment of thin trading follow [EventStudy.jl](https://github.com/florian-st/EventStudy.jl) (MIT), whose thin-trading treatment is that of Stata's eventstudy2.
 
 For each period of a study of FOMC releases:
 

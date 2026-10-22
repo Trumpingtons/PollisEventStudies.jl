@@ -37,7 +37,7 @@ function synthetic_study(folder; model = "marketModel", events, status = "comple
         println(io, "accession,cik,name,ticker,form,items,filed,accepted,during_session,next_open,status,url")
         for e in events
             next_open = e.next_open === nothing ? "" : iso(e.next_open)
-            println(io, "$(e.accession),1,\"Company $(e.ticker), Inc.\",$(e.ticker),8-K,2.02,2026-10-19,$(iso(e.accepted)),$(e.during),$next_open,$status,https://www.sec.gov/")
+            println(io, "$(e.accession),1,\"Company $(e.ticker), Inc.\",$(e.ticker),$(get(e, :form, "8-K")),$(get(e, :items, "2.02")),2026-10-19,$(iso(e.accepted)),$(e.during),$next_open,$status,https://www.sec.gov/")
         end
     end
     for e in events
@@ -52,7 +52,8 @@ function synthetic_study(folder; model = "marketModel", events, status = "comple
                 level *= exp(market)
                 stock *= exp(0.00001 + e.beta * market + 0.001 * randn(rng) + (jumps(t) ? e.jump : 0.0))
                 volume = rand(rng, 1000:2000) * (hot(t) ? 5 : 1)
-                println(io, "$(iso(t)),regular,$(e.ticker),$stock,$stock,$stock,$stock,$volume")
+                # A thinly traded stock has a bar only in the minutes it trades in
+                m % get(e, :trades_every, 1) == 0 && println(io, "$(iso(t)),regular,$(e.ticker),$stock,$stock,$stock,$stock,$volume")
                 println(io, "$(iso(t)),regular,$BENCHMARK,$level,$level,$level,$level,0")
             end
         end
@@ -141,7 +142,14 @@ const EVENTS = [
         @test default.open_events == 1
         @test default.from_open.caar[2] - default.from_open.caar[1] < -2.5
         @test default.from_filing.events[1] == 3 && default.from_filing.caar[1] == 0
+        # Its CAR at the end of the period is that of the period's minutes after the next open, not of the closed market
+        # after the filing; in a period that does not follow the next open, the latter
+        @test default.events.car[2] == default.from_open.caar[end] < -1 && results[2].events.car[2] == 0
         @test default.tests.bmp_events == 3 && default.tests.abnormal_volume_events == 3
+        # The filing after Friday's close is followed to Monday afternoon, over Monday's filing: their abnormal returns,
+        # independent, are correlated over their estimation days in common by a little, and the adjusted t moves by as little
+        @test 0 < abs(default.tests.correlation) < 0.05 && abs(default.tests.bmp_kp_t - default.tests.bmp_t) < 0.05
+        @test isfinite(default.tests.grank_t) && 0 <= default.tests.grank_p <= 1
         # Five times the volume for the first 60 of the 120 minutes: log(5) / 2
         @test abs(default.tests.abnormal_volume - log(5) / 2) < 0.1
         # A period that does not follow the next open has no curve from it
@@ -163,6 +171,63 @@ const EVENTS = [
         # The prices before the period are those of the market model's estimation days: here they are there anyway
         @test default.tests.bmp_events == 3
         @test abs(default.curves[1][32] - 2.0) < 0.5
+    end
+
+    @testset "thin trading" begin
+        # A stock that trades every fourth minute: with a return of zero in the minutes between, its beta comes out at
+        # 0.33 here; measured from trade to trade, 0.93
+        thin = merge(EVENTS[3], (trades_every = 4,))
+        default = analyse(read_study(synthetic_study(mktempdir(); events = [thin])))[1]
+        @test abs(default.events.beta[1] - 1.0) < 0.25
+        @test default.tests.bmp_events == 1
+    end
+
+    @testset "Kolari and Pynnonen" begin
+        P = PollisEventStudies
+        rng = Xoshiro(2)
+        times = DateTime(2026, 10, 19, 14, 31) .+ Minute.(0:199)
+        shared = randn(rng, 200)
+        window(hour) = (DateTime(2026, 10, 20, hour), DateTime(2026, 10, 20, hour + 2))
+        event(sars, scar, hour) = (sar_times = times, sars = sars, scar = scar, window = window(hour))
+        # Two events at the same time with the same abnormal returns, and one later whose period does not overlap
+        results = [event(shared, 1.0, 14), event(shared, 1.0, 15), event(randn(rng, 200), 1.0, 18)]
+        @test P.cross_correlation(results) == 1 / 3
+        @test P.correlation_factor(1 / 3, 3) == sqrt((2 / 3) / (5 / 3))
+        @test P.correlation_factor(0.0, 3) == 1
+
+        # Each event's CAR far above its estimation days' abnormal returns: the highest rank, and a t well above 3
+        far = [event(randn(rng, 200), 10.0 + k, 14 + 2k) for k in 0:4]
+        grank = P.generalized_rank(far)
+        @test grank.df == 201 - 2 && grank.t > 3 && P.pvalue(grank.t, grank.df) < 0.01
+        # Among them: no evidence
+        near = [event(randn(rng, 200), 0.1 * (-1)^k, 14 + 2k) for k in 0:4]
+        @test abs(P.generalized_rank(near).t) < 2
+        @test ismissing(P.generalized_rank(far[1:1]).t)
+    end
+
+    @testset "groups" begin
+        events = [merge(EVENTS[1], (form = "8-K", items = "2.02")), merge(EVENTS[2], (form = "10-Q", items = "")),
+            merge(EVENTS[3], (form = "8-K", items = "2.02 9.01"))]
+        folder = synthetic_study(mktempdir(); events)
+        study = read_study(folder)
+        @test study.group_by == "" && study.events[3].items == ["2.02", "9.01"]
+        @test isempty(analyse(study)[1].groups)
+
+        default = analyse(study; group_by = "item")[1]
+        @test [(g.name, g.events.accession) for g in default.groups] == [("Item 2.02", ["E1", "E3"]), ("Item 9.01", ["E3"]), ("No item", ["E2"])]
+        # A group's tests are those of its events
+        @test default.groups[3].tests.car == default.events.car[2]
+        @test [g.name for g in analyse(study; group_by = "session")[1].groups] == ["During the session", "Outside the session"]
+        @test [g.name for g in analyse(study; group_by = event -> event.ticker == "AAA" ? "A" : "Others")[1].groups] == ["A", "Others"]
+        @test_throws ArgumentError analyse(study; group_by = "colour")
+
+        results = analyse(study; group_by = "form")
+        @test [length(g.events.accession) for g in results[1].groups] == [1, 2]
+        output = sprint(report, results)
+        @test occursin("By form, at +120 minutes", output) && occursin("10-Q", output)
+        files = basename.(write_results(results, joinpath(folder, "results")))
+        @test "default-groups.csv" in files && "default-groups-from-the-filing.csv" in files && "default-groups-from-the-next-open.csv" in files
+        @test length(CSV.File(joinpath(folder, "results", "default-groups-from-the-filing.csv"))) == 2 * (30 + 120 + 1)
     end
 
     @testset "events still capturing" begin

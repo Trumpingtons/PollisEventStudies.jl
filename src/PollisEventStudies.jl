@@ -18,6 +18,7 @@ mean move a minute at a time.
 module PollisEventStudies
 
 using CSV, Tables, TOML, Dates, Statistics, Printf
+using Distributions: TDist, ccdf
 
 export read_study, analyse, report, write_results, run_study, instrument_move
 
@@ -37,9 +38,9 @@ struct Period
 end
 
 """
-A filing: when EDGAR accepted it and the event's time (UTC), which is the earlier of the newswire release and the
-acceptance when the study takes the first public time; whether the event came during the regular session, and the
-next open after it.
+A filing: its form and 8-K items, when EDGAR accepted it and the event's time (UTC), which is the earlier of the
+newswire release and the acceptance when the study takes the first public time; whether the event came during the
+regular session, and the next open after it.
 """
 struct Event
     accession::String
@@ -47,6 +48,7 @@ struct Event
     name::String
     ticker::String
     form::String
+    items::Vector{String}
     accepted::DateTime
     time::DateTime
     during_session::Union{Bool, Nothing}
@@ -62,6 +64,8 @@ struct Study
     estimation_days::Int
     periods::Vector{Period}
     events::Vector{Event}
+    # What the events are grouped by: "form", "item", "session", "ticker", or "" for no groups
+    group_by::String
 end
 
 """A symbol's minute bars, by when each minute ends."""
@@ -93,17 +97,21 @@ function read_study(folder::AbstractString = pwd())
         file = CSV.File(path; types = String)
         # An events.csv written before Pollis looked for newswire releases has no event_time: the acceptance is the event's time
         has_time = :event_time in propertynames(file)
+        has_items = :items in propertynames(file)
         for row in Tables.rows(file)
             (ismissing(row.ticker) || ismissing(row.accepted)) && continue
             during = coalesce(row.during_session, "")
             time = has_time && !ismissing(row.event_time) ? row.event_time : row.accepted
+            # The 8-K items, separated by spaces
+            items = has_items && !ismissing(row.items) ? String.(split(row.items)) : String[]
             push!(events, Event(row.accession, coalesce(row.cik, ""), coalesce(row.name, ""), row.ticker, coalesce(row.form, ""),
-                utc(row.accepted), utc(time), during == "true" ? true : during == "false" ? false : nothing,
+                items, utc(row.accepted), utc(time), during == "true" ? true : during == "false" ? false : nothing,
                 ismissing(row.next_open) ? nothing : utc(row.next_open), coalesce(row.status, "") == "complete"))
         end
     end
     Study(folder, get(settings, "title", basename(folder)), get(settings, "benchmark", "^GSPC"),
-        get(settings, "model", "marketAdjusted") == "marketModel", get(settings, "estimation_days", 5), periods, events)
+        get(settings, "model", "marketAdjusted") == "marketModel", get(settings, "estimation_days", 5), periods, events,
+        get(settings, "group_by", ""))
 end
 
 """The minute bars of an event's prices file, by symbol."""
@@ -130,38 +138,77 @@ function price_at(bars::Series, t::DateTime)
     k == 0 ? nothing : bars.close[k]
 end
 
+"""The bar that ends at time t; nothing when there is none (a minute without trades has no bar)."""
+function bar_at(bars::Series, t::DateTime)
+    k = searchsortedlast(bars.ends, t)
+    k > 0 && bars.ends[k] == t ? k : nothing
+end
+
 """How many of the bars' minutes end after from and at or before to."""
 count_between(bars::Series, from::DateTime, to::DateTime) = max(0, searchsortedlast(bars.ends, to) - searchsortedlast(bars.ends, from))
 
-"""The minute log returns of the stock and of the benchmark in the regular sessions of the `days` trading days before `start`."""
+"""
+How many minutes ending after from and at or before to the stock or the benchmark has a bar in: every minute of the
+regular session, whether the stock traded in it or not, and outside it those the stock traded in.
+"""
+function window_minutes(stock::Series, benchmark::Series, from::DateTime, to::DateTime)
+    span(bars) = bars.ends[searchsortedlast(bars.ends, from) + 1:searchsortedlast(bars.ends, to)]
+    length(union(span(stock), span(benchmark)))
+end
+
+"""
+The stock's log returns from one trade to the next in the regular sessions of the `days` trading days before `start`,
+the benchmark's over the same minutes, how many minutes each spans and when each ends. A stock that does not trade every minute moves
+over the minutes it did not trade in at its next trade, which is measured against the benchmark's move over all of
+them (thin trading, as `cum_periods` in eventstudy2 and in EventStudy.jl), rather than a return of zero in each.
+"""
 function estimation_returns(stock::Series, benchmark::Series, start::DateTime, days)
     # The benchmark trades only in the regular session: its minutes are the session's, all in one UTC day
     n = searchsortedlast(benchmark.ends, start - Millisecond(1))
     ends = benchmark.ends[1:n]
     chosen = Set(unique(Date.(ends))[max(1, end - days + 1):end])
-    stock_returns, benchmark_returns = Float64[], Float64[]
-    for k in 2:n
-        (ends[k] - ends[k - 1] == Minute(1) && Date(ends[k]) in chosen) || continue
-        price, before = price_at(stock, ends[k]), price_at(stock, ends[k - 1])
-        (price === nothing || before === nothing) && continue
-        push!(stock_returns, log(price / before))
-        push!(benchmark_returns, log(benchmark.close[k] / benchmark.close[k - 1]))
+    stock_returns, benchmark_returns, minutes, times = Float64[], Float64[], Int[], DateTime[]
+    # The benchmark's minute of the stock's last trade in the session, and the stock's bar then
+    last_minute, last_bar = 0, 0
+    for k in 1:n
+        Date(ends[k]) in chosen || continue
+        # A gap in the benchmark's minutes starts another session: no return spans it
+        (k == 1 || ends[k] - ends[k - 1] != Minute(1)) && (last_minute = 0)
+        bar = bar_at(stock, ends[k])
+        bar === nothing && continue
+        if last_minute > 0
+            push!(stock_returns, log(stock.close[bar] / stock.close[last_bar]))
+            push!(benchmark_returns, log(benchmark.close[k] / benchmark.close[last_minute]))
+            push!(minutes, k - last_minute)
+            push!(times, ends[k])
+        end
+        last_minute, last_bar = k, bar
     end
-    stock_returns, benchmark_returns
+    stock_returns, benchmark_returns, minutes, times
 end
 
-"""Alpha (per minute of the regular session), beta and the residual standard deviation; nothing with too few returns."""
-function fit(stock_returns, benchmark_returns)
-    (length(stock_returns) < MIN_RETURNS || var(benchmark_returns) == 0) && return nothing
-    beta = cov(benchmark_returns, stock_returns) / var(benchmark_returns)
-    alpha = mean(stock_returns) - beta * mean(benchmark_returns)
-    (alpha = alpha, beta = beta, sigma = std(stock_returns .- alpha .- beta .* benchmark_returns))
+"""
+Alpha (per minute of the regular session), beta and the residual standard deviation of a minute; nothing with too
+few returns. A return over g minutes has g times a minute's alpha and g times its variance: the returns are weighed
+by 1 / g (weighted least squares), which is ordinary least squares when the stock trades every minute.
+"""
+function fit(stock_returns, benchmark_returns, minutes)
+    length(stock_returns) < MIN_RETURNS && return nothing
+    # The normal equations of r / sqrt(g) = alpha sqrt(g) + beta m / sqrt(g)
+    g, m, r = minutes, benchmark_returns, stock_returns
+    gg, gm, mm, gr, mr = sum(g), sum(m), sum(m .^ 2 ./ g), sum(r), sum(m .* r ./ g)
+    determinant = gg * mm - gm^2
+    determinant <= 0 && return nothing
+    alpha, beta = (mm * gr - gm * mr) / determinant, (gg * mr - gm * gr) / determinant
+    residuals = (r .- alpha .* g .- beta .* m) ./ sqrt.(g)
+    (alpha = alpha, beta = beta, sigma = sqrt(sum(residuals .^ 2) / (length(residuals) - 2)), residuals = residuals)
 end
 
 """
 An event's cumulative abnormal returns over a period, in per cent from the start of the period, a value a minute from
 the filing and, for a filing outside the regular session in a period that follows the next open, from the next open;
-and at the end of the period its CAR, standardized CAR, abnormal volume and beta. Nothing without the prices at its start.
+and at the end of the period (for such a filing, the period's minutes after the next open) its CAR, standardized CAR,
+abnormal volume and beta. Nothing without the prices at its start.
 """
 function analyse_event(study::Study, period::Period, event::Event, now::DateTime)
     prices = read_prices(study, event)
@@ -171,9 +218,11 @@ function analyse_event(study::Study, period::Period, event::Event, now::DateTime
     stock_start, benchmark_start = price_at(stock, start), price_at(benchmark, start)
     (stock_start === nothing || benchmark_start === nothing) && return nothing
 
-    stock_returns, benchmark_returns = estimation_returns(stock, benchmark, start, study.estimation_days)
-    model = study.market_model ? fit(stock_returns, benchmark_returns) : nothing
-    sigma = model !== nothing ? model.sigma : length(stock_returns) >= MIN_RETURNS ? std(stock_returns .- benchmark_returns) : nothing
+    stock_returns, benchmark_returns, minutes, times = estimation_returns(stock, benchmark, start, study.estimation_days)
+    model = study.market_model ? fit(stock_returns, benchmark_returns, minutes) : nothing
+    residuals = model !== nothing ? model.residuals :
+        length(stock_returns) >= MIN_RETURNS ? (stock_returns .- benchmark_returns) ./ sqrt.(minutes) : nothing
+    sigma = model !== nothing ? model.sigma : residuals !== nothing ? std(residuals) : nothing
     known = event.complete ? typemax(DateTime) : now - SETTLE
 
     function car(t)
@@ -188,9 +237,12 @@ function analyse_event(study::Study, period::Period, event::Event, now::DateTime
     follows_open = period.next_open && event.during_session === false && event.next_open !== nothing
     from_open = follows_open ? Union{Missing, Float64}[car(event.next_open + Minute(m)) for m in 0:period.after] : nothing
 
-    finish = event.time + Minute(period.after)
-    scar = sigma === nothing || ismissing(from_filing[end]) ? missing :
-        from_filing[end] / 100 / (sigma * sqrt(max(1, count_between(stock, start, finish))))
+    # A filing outside the regular session followed from the next open ends the period after the next open, where the
+    # market first trades on it: its CAR from the filing would end while the market is closed
+    finish = (follows_open ? event.next_open : event.time) + Minute(period.after)
+    final = follows_open ? from_open[end] : from_filing[end]
+    scar = sigma === nothing || ismissing(final) ? missing :
+        final / 100 / (sigma * sqrt(max(1, window_minutes(stock, benchmark, start, finish))))
 
     # The mean log(1 + volume) of the regular-session minutes after the event, or after the next open, less that of
     # the regular-session minutes before the event
@@ -200,11 +252,80 @@ function analyse_event(study::Study, period::Period, event::Event, now::DateTime
     volume = isempty(window) || length(baseline) < MIN_VOLUME_MINUTES ? missing : mean(window) - mean(baseline)
 
     (accession = event.accession, ticker = event.ticker, name = event.name, from_filing = from_filing, from_open = from_open,
-        car = from_filing[end], scar = scar, abnormal_volume = volume, beta = model === nothing ? missing : model.beta)
+        car = final, scar = scar, abnormal_volume = volume, beta = model === nothing ? missing : model.beta,
+        # The standardized abnormal returns of the estimation days, by when each ends, and the period, for the tests
+        # of Kolari and Pynnonen
+        sar_times = times, sars = sigma === nothing ? Float64[] : residuals ./ sigma, window = (start, finish))
 end
 
 """The cross-sectional t of a sample: its mean over its standard error; missing with fewer than two."""
 tstat(values) = length(values) < 2 ? missing : mean(values) / (std(values) / sqrt(length(values)))
+
+"""The two-sided p-value of a t with `df` degrees of freedom; missing without one."""
+pvalue(t, df) = ismissing(t) || !isfinite(t) || df < 1 ? missing : 2 * ccdf(TDist(df), abs(t))
+
+"""
+The mean cross-correlation of the events' standardized abnormal returns (Kolari and Pynnonen 2010), over every pair
+of events: over the minutes of their estimation days in common for a pair whose periods overlap, and zero for a pair
+whose periods do not, whose abnormal returns come from different minutes. Missing with fewer than two events.
+"""
+function cross_correlation(results)
+    n = length(results)
+    n < 2 && return missing
+    total = 0.0
+    for i in 1:n - 1, j in i + 1:n
+        a, b = results[i], results[j]
+        (a.window[2] <= b.window[1] || b.window[2] <= a.window[1]) && continue
+        at = Dict(zip(a.sar_times, a.sars))
+        pairs = [(at[time], b.sars[k]) for (k, time) in enumerate(b.sar_times) if haskey(at, time)]
+        length(pairs) < MIN_RETURNS && continue
+        r = cor(first.(pairs), last.(pairs))
+        isfinite(r) && (total += r)
+    end
+    total / (n * (n - 1) / 2)
+end
+
+"""
+How much the t of the standardized CARs shrinks for their cross-correlation r (Kolari and Pynnonen 2010):
+sqrt((1 - r) / (1 + (n - 1) r)); 1 when the events' periods do not overlap.
+"""
+function correlation_factor(r, n)
+    (ismissing(r) || 1 + (n - 1) * r <= 0) && return missing
+    sqrt((1 - r) / (1 + (n - 1) * r))
+end
+
+"""
+The generalized rank test of Kolari and Pynnonen (2011) on the events' CARs, robust to returns far from normal, to
+the volatility an event brings and to the events' cross-correlation: each event's standardized CAR, restandardized by
+their cross-sectional standard deviation, is ranked among the standardized abnormal returns of its estimation days.
+Its t and degrees of freedom; missing with fewer than two events.
+"""
+function generalized_rank(results)
+    n = length(results)
+    missing_test = (t = missing, df = 0)
+    n < 2 && return missing_test
+    scale = std([r.scar for r in results])
+    (isfinite(scale) && scale > 0) || return missing_test
+    # The mean standardized rank at each time, counted back from the event (1) through the estimation days, over the
+    # events with an abnormal return then
+    sums, counts = Float64[], Int[]
+    for result in results
+        values = [result.sars; result.scar / scale]
+        ranks = invperm(sortperm(values))
+        for (k, rank) in enumerate(reverse(ranks))
+            k > length(sums) && (push!(sums, 0.0); push!(counts, 0))
+            sums[k] += rank / (length(values) + 1) - 0.5
+            counts[k] += 1
+        end
+    end
+    times = length(sums)
+    times < 3 && return missing_test
+    means = sums ./ counts
+    spread = sqrt(sum(counts ./ n .* means .^ 2) / times)
+    z = means[1] / spread
+    times - 1 - z^2 <= 0 && return missing_test
+    (t = z * sqrt((times - 2) / (times - 1 - z^2)), df = times - 2)
+end
 
 """The average of the events' curves a minute at a time, over the events known at that minute, and its t."""
 function average(curves, minutes)
@@ -235,30 +356,73 @@ end
 known(values) = Float64[value for value in values if !ismissing(value)]
 
 """
-    analyse(study; now = Dates.now(UTC))
+The events' results over a period: each event's (`events`, a table), each event's CAR a minute at a time from the
+filing (`curves`), the AAR and CAAR from the filing (`from_filing`) and from the next open (`from_open`), and the tests
+at the end of the period (`tests`).
+"""
+function summarise(period::Period, results)
+    opens = [result.from_open for result in results if result.from_open !== nothing]
+    cars, scars, volumes = known(r.car for r in results), known(r.scar for r in results), known(r.abnormal_volume for r in results)
+    mean_or_missing(values) = isempty(values) ? missing : mean(values)
+    standardized = [r for r in results if !ismissing(r.scar)]
+    correlation = cross_correlation(standardized)
+    factor = correlation_factor(correlation, length(standardized))
+    bmp_t = tstat(scars)
+    bmp_kp_t = ismissing(bmp_t) || ismissing(factor) ? missing : bmp_t * factor
+    grank = generalized_rank(standardized)
+    (events = (accession = [r.accession for r in results], ticker = [r.ticker for r in results], name = [r.name for r in results],
+            car = [r.car for r in results], scar = [r.scar for r in results], abnormal_volume = [r.abnormal_volume for r in results],
+            beta = [r.beta for r in results]),
+        curves = [r.from_filing for r in results],
+        from_filing = isempty(results) ? nothing : averages([r.from_filing for r in results], -period.before:period.after),
+        from_open = isempty(opens) ? nothing : averages(opens, 0:period.after),
+        open_events = length(opens),
+        tests = (car = mean_or_missing(cars), car_t = tstat(cars), car_p = pvalue(tstat(cars), length(cars) - 1), car_events = length(cars),
+            bmp = mean_or_missing(scars), bmp_t = bmp_t, bmp_p = pvalue(bmp_t, length(scars) - 1), bmp_events = length(scars),
+            correlation = correlation, bmp_kp_t = bmp_kp_t, bmp_kp_p = pvalue(bmp_kp_t, length(scars) - 1),
+            grank_t = grank.t, grank_p = pvalue(grank.t, grank.df),
+            abnormal_volume = mean_or_missing(volumes), abnormal_volume_t = tstat(volumes),
+            abnormal_volume_p = pvalue(tstat(volumes), length(volumes) - 1), abnormal_volume_events = length(volumes)))
+end
+
+"""
+The groups an event is in: its form, each of its 8-K items (a filing with several is in the group of each), whether
+it came during the regular session, its ticker, or the name or names a function of the event gives.
+"""
+function groups_of(event::Event, group_by)
+    group_by isa Function && return string.(vcat(group_by(event)))
+    group_by == "form" && return [event.form]
+    group_by == "item" && return isempty(event.items) ? ["No item"] : ["Item " * item for item in event.items]
+    group_by == "session" && return [event.during_session === nothing ? "Session unknown" :
+        event.during_session ? "During the session" : "Outside the session"]
+    group_by == "ticker" && return [event.ticker]
+    throw(ArgumentError("group_by is \"form\", \"item\", \"session\", \"ticker\" or a function of the event, not \"$group_by\""))
+end
+
+"""What the report calls the groups."""
+grouping(group_by) = group_by isa Function ? "group" : get(Dict("form" => "form", "item" => "8-K item",
+    "session" => "session", "ticker" => "ticker"), group_by, group_by)
+
+"""
+    analyse(study; group_by = study.group_by, now = Dates.now(UTC))
 
 For each period of the study: its events' results (`events`, a table), each event's CAR a minute at a time from
 the filing (`curves`), the AAR and CAAR from the filing
 (`from_filing`, a table a minute a row) and from the next open (`from_open`, or nothing), and the tests at the end of
 the period (`tests`). Events still capturing prices count up to the last complete minute before `now`.
+
+With `group_by` ("form", "item", "session", "ticker", or a function of the event that gives a group's name or
+several), the same for each group of events (`groups`, each with its `name`), as EventStudy.jl's groups do.
 """
-function analyse(study::Study; now::DateTime = Dates.now(UTC))
+function analyse(study::Study; group_by = study.group_by, now::DateTime = Dates.now(UTC))
+    grouped = !(group_by isa AbstractString && isempty(group_by))
     map(study.periods) do period
-        results = [result for result in (analyse_event(study, period, event, now) for event in study.events) if result !== nothing]
-        opens = [result.from_open for result in results if result.from_open !== nothing]
-        cars, scars, volumes = known(r.car for r in results), known(r.scar for r in results), known(r.abnormal_volume for r in results)
-        mean_or_missing(values) = isempty(values) ? missing : mean(values)
-        (period = period,
-            events = (accession = [r.accession for r in results], ticker = [r.ticker for r in results], name = [r.name for r in results],
-                car = [r.car for r in results], scar = [r.scar for r in results], abnormal_volume = [r.abnormal_volume for r in results],
-                beta = [r.beta for r in results]),
-            curves = [r.from_filing for r in results],
-            from_filing = isempty(results) ? nothing : averages([r.from_filing for r in results], -period.before:period.after),
-            from_open = isempty(opens) ? nothing : averages(opens, 0:period.after),
-            open_events = length(opens),
-            tests = (car = mean_or_missing(cars), car_t = tstat(cars), car_events = length(cars),
-                bmp = mean_or_missing(scars), bmp_t = tstat(scars), bmp_events = length(scars),
-                abnormal_volume = mean_or_missing(volumes), abnormal_volume_t = tstat(volumes), abnormal_volume_events = length(volumes)))
+        analysed = [(event, result) for (event, result) in ((event, analyse_event(study, period, event, now)) for event in study.events) if result !== nothing]
+        results = last.(analysed)
+        names = grouped ? sort(unique(reduce(vcat, (groups_of(event, group_by) for (event, _) in analysed); init = String[]))) : String[]
+        groups = [merge((name = name,), summarise(period, [result for (event, result) in analysed if name in groups_of(event, group_by)]))
+                  for name in names]
+        merge((period = period,), summarise(period, results), (grouped_by = grouped ? grouping(group_by) : "", groups = groups))
     end
 end
 
@@ -293,15 +457,36 @@ function report(io::IO, results)
             report_table(io, result.from_open, marks)
         end
         tests = result.tests
-        @printf(io, "\nAt +%d minutes: CAR %s%% (t = %s, %d events)\n", period.after, format(tests.car), format(tests.car_t), tests.car_events)
+        @printf(io, "\nAt +%d minutes: CAR %s%% (t = %s, p = %s, %d events)\n", period.after, format(tests.car), format(tests.car_t), format(tests.car_p), tests.car_events)
         if tests.bmp_events == 0
             println(io, "Boehmer, Musumeci and Poulsen: needs the estimation days, which only the market model captures")
         else
-            @printf(io, "Boehmer, Musumeci and Poulsen: mean standardized CAR %s (t = %s, %d events)\n", format(tests.bmp), format(tests.bmp_t), tests.bmp_events)
+            @printf(io, "Boehmer, Musumeci and Poulsen: mean standardized CAR %s (t = %s, p = %s, %d events)\n", format(tests.bmp), format(tests.bmp_t), format(tests.bmp_p), tests.bmp_events)
+            @printf(io, "  adjusted for cross-correlation (Kolari and Pynnonen 2010, mean correlation %s): t = %s, p = %s\n",
+                format(tests.correlation), format(tests.bmp_kp_t), format(tests.bmp_kp_p))
+            @printf(io, "Generalized rank test (Kolari and Pynnonen 2011): t = %s, p = %s\n", format(tests.grank_t), format(tests.grank_p))
         end
-        @printf(io, "Abnormal volume: %s (t = %s, %d events)\n", format(tests.abnormal_volume), format(tests.abnormal_volume_t), tests.abnormal_volume_events)
+        @printf(io, "Abnormal volume: %s (t = %s, p = %s, %d events)\n", format(tests.abnormal_volume), format(tests.abnormal_volume_t), format(tests.abnormal_volume_p), tests.abnormal_volume_events)
+        isempty(result.groups) && continue
+        println(io, "\nBy ", result.grouped_by, ", at +", period.after, " minutes")
+        @printf(io, "%-24s %7s %10s %8s %8s %8s %8s %10s %8s\n", result.grouped_by, "events", "CAR %", "t", "BMP t", "KP t", "GRANK t", "volume", "t")
+        for group in groups_table(result)
+            @printf(io, "%-24s %7d %10s %8s %8s %8s %8s %10s %8s\n", first(group.group, 24), group.events, format(group.car), format(group.car_t),
+                format(group.bmp_t), format(group.bmp_kp_t), format(group.grank_t), format(group.abnormal_volume), format(group.abnormal_volume_t))
+        end
     end
 end
+
+"""A period's groups a row, with their tests at the end of the period."""
+groups_table(result) = [(group = group.name, events = length(group.events.accession), car = group.tests.car, car_t = group.tests.car_t,
+    car_p = group.tests.car_p, bmp = group.tests.bmp, bmp_t = group.tests.bmp_t, bmp_p = group.tests.bmp_p,
+    correlation = group.tests.correlation, bmp_kp_t = group.tests.bmp_kp_t, bmp_kp_p = group.tests.bmp_kp_p,
+    grank_t = group.tests.grank_t, grank_p = group.tests.grank_p, abnormal_volume = group.tests.abnormal_volume,
+    abnormal_volume_t = group.tests.abnormal_volume_t, abnormal_volume_p = group.tests.abnormal_volume_p) for group in result.groups]
+
+"""The tables of a period's groups one after the other, each row with its group's name."""
+stacked(result, table) = [merge((group = group.name,), row) for group in result.groups if getproperty(group, table) !== nothing
+                          for row in Tables.rowtable(getproperty(group, table))]
 
 slug(name) = strip(replace(lowercase(name), r"[^a-z0-9]+" => "-"), '-')
 
@@ -309,7 +494,9 @@ slug(name) = strip(replace(lowercase(name), r"[^a-z0-9]+" => "-"), '-')
     write_results(results, folder)
 
 Writes, for each period, its events (`<period>-events.csv`) and its AAR and CAAR a minute a row
-(`<period>-from-the-filing.csv`, `<period>-from-the-next-open.csv`) to `folder`; returns the files.
+(`<period>-from-the-filing.csv`, `<period>-from-the-next-open.csv`) to `folder` and, when the events are grouped, the
+groups' tests (`<period>-groups.csv`, a group a row) and their AAR and CAAR (`<period>-groups-from-the-filing.csv`,
+`<period>-groups-from-the-next-open.csv`, with each row's group); returns the files.
 """
 function write_results(results, folder::AbstractString)
     mkpath(folder)
@@ -320,6 +507,12 @@ function write_results(results, folder::AbstractString)
         save(name * "-events.csv", result.events)
         result.from_filing === nothing || save(name * "-from-the-filing.csv", result.from_filing)
         result.from_open === nothing || save(name * "-from-the-next-open.csv", result.from_open)
+        isempty(result.groups) && continue
+        save(name * "-groups.csv", groups_table(result))
+        for (table, file) in ((:from_filing, "-groups-from-the-filing.csv"), (:from_open, "-groups-from-the-next-open.csv"))
+            rows = stacked(result, table)
+            isempty(rows) || save(name * file, rows)
+        end
     end
     files
 end
@@ -492,14 +685,15 @@ heading(study::Study) = string(study.title, ": benchmark ", study.benchmark, ", 
 heading(study::FomcStudy) = string(study.title, ": FOMC releases; ", join(study.instruments, ", "), "; ", length(study.releases), " releases")
 
 """
-    run_study(folder = pwd(); now = Dates.now(UTC))
+    run_study(folder = pwd(); group_by = nothing, now = Dates.now(UTC))
 
 Reads the study in `folder`, analyses it, prints the report and writes the results to `folder/results`; returns them.
+A study of filings is grouped by `group_by` (see `analyse`), or else as its `study.toml` says.
 """
-function run_study(folder::AbstractString = pwd(); now::DateTime = Dates.now(UTC))
+function run_study(folder::AbstractString = pwd(); group_by = nothing, now::DateTime = Dates.now(UTC))
     study = read_study(folder)
     println(heading(study))
-    results = analyse(study; now)
+    results = study isa Study ? analyse(study; group_by = something(group_by, study.group_by), now) : analyse(study; now)
     report(results)
     write_results(results, joinpath(folder, "results"))
     results
