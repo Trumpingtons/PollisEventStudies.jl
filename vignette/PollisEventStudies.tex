@@ -1,0 +1,450 @@
+% Pollis Domain Packages: Market Event Studies (PollisEventStudies.jl) -- draft 1 (22 October 2026)
+% Compile with: latexmk -pdf dp_event_studies.tex && latexmk -c
+\input{newmethods_style}
+
+% A package Pollis needs for a feature of its own, not one that reproduces a paper: its own header, key facts and credit
+\renewcommand{\nmdate}{22 October 2026}
+\fancyfoot[L]{\footnotesize\color{soft}\textbf{Pollis}\enspace Domain Packages\enspace·\enspace\nmtheme}
+\renewcommand{\nmhead}[3]{%
+  \renewcommand{\nmtheme}{#1}%
+  \thispagestyle{fancy}%
+  \begin{minipage}[c]{13mm}\pollislogo{11mm}\end{minipage}%
+  \begin{minipage}[c]{\dimexpr\linewidth-13mm\relax}
+    {\color{navy}\Large\bfseries Pollis}\enspace{\color{soft}Domain Packages}\hfill
+    {\color{deepamber}\small\bfseries\MakeUppercase{#1}}
+  \end{minipage}\par\vspace{7mm}
+  {\color{navy}\fontsize{22}{26}\selectfont\bfseries #2}\par\vspace{4pt}
+  {\color{soft}\large #3}\par\vspace{5mm}}
+\renewcommand{\factsheet}[4]{%
+  \begin{tcolorbox}[enhanced, colback=pale, colframe=pale, boxrule=0pt, sharp corners,
+    left=7pt, right=7pt, top=5pt, bottom=5pt, fontupper=\small]
+  \begin{tabularx}{\linewidth}{@{}>{\leavevmode\bfseries\color{navy}}p{27mm}>{\leavevmode}X@{}}
+  In Pollis & #1\\
+  Missing in Julia & #2\\
+  Package & #3\\
+  Tests & #4
+  \end{tabularx}
+  \end{tcolorbox}}
+\renewcommand{\nmcredit}{%
+  \par\vfill
+  \begin{minipage}[b]{0.78\linewidth}\footnotesize\color{soft}
+  Package written and tested with Claude Code (Anthropic) in Pollis.\par
+  \textcopyright\ 2026 Antonio Saragga Seabra\enspace·\enspace Licensed under \href{https://creativecommons.org/licenses/by-sa/4.0/}{CC BY-SA 4.0}\enspace·\enspace Draft, \nmdate
+  \end{minipage}\hfill
+  \begin{minipage}[b]{0.18\linewidth}\raggedleft\pollislogo{9mm}\par\vspace{2pt}{\footnotesize contact@pollis.org}\end{minipage}}
+
+\begin{document}
+
+\nmhead{Event studies}
+  {Market Event Studies: filings and FOMC releases, a minute at a time}
+  {How did the market take an 8-K, or the Fed's statement, in the minutes after it came out?}
+
+\factsheet
+  {\menupath{Compose \gt Workflows \gt Event Studies}: studies of the filings an alert on SEC filings fires, and of the
+   FOMC's releases. Pollis captures the minute prices into \fn{\textasciitilde/.pollis/event-studies}, draws the CAAR as
+   they come in, and writes a \fn{study.ipynb} that runs the package.}
+  {intraday event studies from minute bars: periods measured in minutes, the next open for a filing outside the session,
+   trading that is not every minute, and the moves of rate futures at a release. The Julia event-study code we compared
+   works on daily returns.}
+  {\fn{PollisEventStudies.jl}, registered in PollisRegistry: \fn{run\_study("path/to/study")}.}
+  {60 tests on synthetic studies whose answers are known, built minute by minute; no published table yet (see Still open).}
+
+\nmsection{Why a package}
+The packages in Pollis so far each came from a replication: a paper, its data and its printed results. This one comes
+from a feature: Pollis watches EDGAR and the Federal Reserve, and an event study turns an alert's filings into evidence.
+The analysis has to live somewhere that a notebook, a test suite and other researchers can all reach.
+
+\nmsub{Two kinds of event studies}
+\emph{Market event studies} (\nmcite{ffjr1969}{Fama, Fisher, Jensen and Roll 1969}; \nmcite{mackinlay1997}{MacKinlay
+1997}) compare each security's return around an event with a model of its normal return, and need no control group.
+\emph{Panel event studies} follow an outcome of units treated at different dates against units not yet treated or never
+treated, period by period before and after (\nmcite{sun2021}{Sun and Abraham 2021}); they serve finance, policy
+evaluation and health studies alike. This document is about the first. The second is to come, in this package, from
+the same menu item.
+
+\nmsection{The data}
+A study is a folder: \fn{study.toml} (the benchmark, \fn{\^{}GSPC} by default; the model; the estimation days, 5 by
+default; the periods, 30 minutes before to 120 after and the next open by default; and \fn{group\_by}),
+\fn{events.csv} (a filing a row, with its form, 8-K items, EDGAR's acceptance time, the event's time, whether it came
+during the regular session and the next open after it) and \fn{prices/} (a file per filing with the minute bars of the
+stock and of the benchmark). The event's time is the earlier of the newswire release and EDGAR's acceptance. A minute in
+which the stock did not trade has no bar.
+
+\nmsection{The method}
+\nmsub{Normal returns}
+\emph{Market-adjusted}: the abnormal return is the stock's log return less the benchmark's. \emph{Market model}: alpha
+and beta are estimated on the regular sessions of the estimation days before the period. A thinly traded stock is
+measured from one trade to the next, against the benchmark's move over the same minutes, and a return over $g$ minutes
+is weighed by $1/g$ (weighted least squares; ordinary least squares when the stock trades every minute). A return of
+zero in each minute without a trade would bias beta towards zero. This is the treatment of thin trading in Stata's
+eventstudy2 and in EventStudy.jl.
+
+\nmsub{Cumulative abnormal returns}
+Each event's CAR is followed a minute at a time from the start of the period, from the filing and, for a filing outside
+the regular session, from the next open, where the market first trades on it. The AAR and CAAR a minute at a time come
+with their cross-sectional t. A filing outside the session, in a period that follows the next open, is tested at the end
+of the period's minutes after the next open: its CAR from the filing would end while the market is closed. Events
+still capturing prices count up to the last complete minute.
+
+\nmsub{Tests at the end of the period, each with its two-sided p-value}
+\begin{itemize}
+  \item \textbf{The CAR's cross-sectional t.}
+  \item \textbf{Boehmer, Musumeci and Poulsen (1991)}: the t of the standardized CARs,
+    $\mathrm{SCAR}_i = \mathrm{CAR}_i / (\hat\sigma_i \sqrt{L_i})$, with $\hat\sigma_i$ the standard deviation of a
+    minute's abnormal return on the estimation days and $L_i$ the minutes of the period in which the stock or the
+    benchmark has a bar (every minute of the session, whether the stock traded or not). Robust to the volatility an
+    event brings.
+  \item \textbf{Adjusted for cross-correlation} (\nmcite{kp2010}{Kolari and Pynn\"onen 2010}): events at the same time
+    move together, and the BMP t overstates the evidence. It is multiplied by $\sqrt{(1-\bar r)/(1+(n-1)\bar r)}$,
+    $\bar r$ the mean correlation over all pairs: that of their standardized abnormal returns over the estimation
+    minutes they share when their periods overlap (30 at least), zero when they do not.
+  \item \textbf{The generalized rank test} (\nmcite{kp2011}{Kolari and Pynn\"onen 2011}): each event's SCAR, divided by
+    the SCARs' cross-sectional standard deviation, is ranked among its standardized abnormal returns on the estimation
+    days. Robust as well to returns far from normal; a t with $T-2$ degrees of freedom.
+  \item \textbf{Abnormal volume}: the mean $\log(1+\text{volume})$ of the session's minutes after the event (or the next
+    open) less that of its minutes before, with its cross-sectional t.
+\end{itemize}
+The p-values come from Student's t (Distributions.jl), with $n-1$ degrees of freedom for the cross-sectional tests.
+
+\nmsub{Groups}
+With \fn{group\_by} (\fn{"form"}, \fn{"item"}, \fn{"session"}, \fn{"ticker"}, or a function of the event) every result
+above is given for each group too; a filing with several 8-K items is in the group of each. Pollis sets it from the
+study's Group By field. Grouping follows EventStudy.jl.
+
+\nmsub{FOMC releases}
+For the statement, projections and minutes, the move of each instrument over each period (10 minutes before to 20 after
+by default): federal funds and SOFR futures in basis points of the implied rate, FF1 scaled by $D/(D-d)$, $D$ the days
+of the month and $d$ the release's day, and FF2 in its place in the month's last week (\nmcite{kuttner2001}{Kuttner
+2001}); the 5- and 10-year yields in basis points; prices in per cent. The mean move with its cross-sectional t, and the
+mean path a minute at a time.
+
+\nmsection{A worked example}
+\nmsub{The study}
+Pollis writes \fn{study.toml} when the study is made on the Event Studies page, with a comment over each setting. A study
+of the filings of an alert on 8-Ks, with the market model, grouped by session:
+
+\begingroup\footnotesize
+\begin{verbatim}
+title = "Earnings 8-Ks"
+alert = "earnings-8k"
+benchmark = "^GSPC"
+model = "marketModel"
+event_time = "firstPublic"
+estimation_days = 5
+group_by = "session"
+
+[[periods]]
+name = "Default"
+before = 30
+after = 120
+next_open = true
+
+[[periods]]
+name = "Short Run"
+before = 5
+after = 15
+next_open = false
+\end{verbatim}
+\endgroup
+
+
+\nmsub{The report}
+\fn{run\_study(folder)} reads the folder, analyses each period, prints the report and writes \fn{results/}. Below, the
+report of the package's synthetic study of three filings (the first of the tests), of its Default period: one filing
+during the session that jumps 2\%, one after Friday's close that falls 3\% at Monday's open, and one during the session
+that jumps 1\%. The AAR and CAAR tables are printed at minutes $-30$, $-15$, $-5$, 0, 1, 5, 15, 30, 60 and 120; the
+files hold every minute.
+
+\begingroup\footnotesize
+\begin{verbatim}
+Synthetic: benchmark ^GSPC, market model on the 5 trading days before; 3 events with a ticker
+and an acceptance time
+
+Default: 30 minutes before the filing to 120 after; 3 events with prices
+
+Minutes from the filing
+  minute  events      AAR %        t     CAAR %        t
+     -30       3                          0.000
+      -5       3     -0.067   -1.684     -0.023   -1.549
+       0       3      0.011    0.644     -0.045   -0.254
+       1       3      1.116    1.785      1.071    1.961
+      15       3     -0.010   -0.386      0.937    1.986
+     120       3      0.086    1.689      1.618    1.997
+
+Minutes from the next open, 1 events
+  minute  events      AAR %        t     CAAR %        t
+       0       1                          0.000
+       1       1     -2.974              -2.974
+     120       1     -0.062              -1.919
+
+At +120 minutes: CAR 0.978% (t = 0.675, p = 0.569, 3 events)
+Boehmer, Musumeci and Poulsen: mean standardized CAR 0.737 (t = 0.600, p = 0.609, 3 events)
+  adjusted for cross-correlation (Kolari and Pynnonen 2010, mean correlation -0.008): t = 0.608,
+  p = 0.605
+Generalized rank test (Kolari and Pynnonen 2011): t = 0.713, p = 0.476
+Abnormal volume: 0.811 (t = 91.512, p = 0.000, 3 events)
+
+By session, at +120 minutes
+session                   events      CAR %        t    BMP t     KP t  GRANK t     volume        t
+During the session             2      2.426   31.783   34.831   34.831    2.458      0.808   55.958
+Outside the session            1     -1.919                                          0.817
+\end{verbatim}
+\endgroup
+
+The filing after the close is tested on the 120 minutes after Monday's open, where the market first traded on it:
+$-1.919$\%, the last row of the table from the next open, not the zero of the closed market after the filing. Two
+filings up and one down give a mean CAR of 0.978\% that no test finds evidence in; the two during the session, a group
+of their own, give 2.426\% ($t = 31.8$). Friday's filing, followed to Monday afternoon, overlaps Monday's filing: their
+standardized abnormal returns are correlated over the estimation minutes they share ($\bar r = -0.008$), and the BMP t
+moves from 0.600 to 0.608.
+
+\nmsub{The files}
+\fn{write\_results} writes, for each period (its name in lower case, with hyphens):
+\begin{valuetable}{@{}lX@{}}
+\textbf{File} & \textbf{What it holds}\\\midrule
+\fn{default-events.csv} & an event a row: its CAR, standardized CAR, abnormal volume and beta\\
+\fn{default-from-the-filing.csv} & a minute a row: the events known then, the AAR and CAAR with their t\\
+\fn{default-from-the-next-open.csv} & the same from the next open, for the filings outside the session\\
+\fn{default-groups.csv} & a group a row: its events and its tests at the end of the period, with their p-values\\
+\fn{default-groups-from-the-filing.csv} & each group's AAR and CAAR a minute at a time, each row with its group\\
+\fn{default-groups-from-the-next-open.csv} & the same from the next open\\
+\end{valuetable}
+A study of FOMC releases writes \fn{tight-moves.csv} (a release a row, an instrument a column),
+\fn{tight-summary.csv} (an instrument a row: its unit, releases, mean move, standard deviation and t) and
+\fn{tight-paths.csv} (the mean move a minute at a time, by instrument).
+
+In Julia, \fn{results = analyse(read\_study(folder))} gives the same, a named tuple a period:
+\begin{itemize}
+  \item \fn{results[1].tests}: the tests at the end of the period, with their p-values;
+  \item \fn{results[1].events}: the events' table;
+  \item \fn{results[1].from\_filing} and \fn{results[1].from\_open}: the AAR and CAAR a minute at a time;
+  \item \fn{results[1].curves}: each event's CAR a minute at a time;
+  \item \fn{results[1].groups}: the same for each group, with its \fn{name}.
+\end{itemize}
+\fn{report(results)} prints them and \fn{write\_results(results, folder)} writes them.
+
+\nmsection{The notebook}
+Each study folder has a \fn{study.ipynb} that Pollis writes when the study is made, a Julia notebook in four parts:
+\begin{enumerate}
+  \item \textbf{What the folder holds}: \fn{study.toml}, \fn{events.csv}, \fn{prices/} and \fn{news/} (the articles
+    Google News lists from a day before each filing to a day after), and what the package computes from them.
+  \item \textbf{Install and run.} The cell adds PollisRegistry when it is not among the registries, adds
+    PollisEventStudies when it is not installed and updates it when it is older than the study needs, then runs
+    \fn{run\_study} on the notebook's own folder (or the study's path, when the notebook was moved), which prints the
+    report and writes \fn{results/}.
+  \item \textbf{Each event}: \fn{results[1].events}, the table of the first period's events.
+  \item \textbf{Notes}: the two models of normal returns, the estimation days the BMP test needs, Yahoo Finance's 30
+    days of minute prices, and the benchmark's trading only during the session.
+\end{enumerate}
+Events still capturing prices count up to the last complete minute, so running the notebook again as they come in
+brings the results up to date. A study of FOMC releases has its own notebook, with the instruments, the contract
+months, Kuttner's scaling and \fn{results[1].moves}.
+
+\nmsection{What the tests show}
+Three synthetic filings over seven trading days, with known betas, jumps and volume; one filed after Friday's close.
+\begin{valuetable}{@{}lXl@{}}
+\textbf{Test} & \textbf{Built in} & \textbf{Measured}\\\midrule
+Betas & 1.2, 0.8, 1.0 & 1.195, 0.828, 0.988\\
+Jump at the filing & +2\%, +1\% & +1.79\%, +1.42\% the minute after\\
+Jump at Monday's open & $-3$\% & $-2.97$\%\\
+Thin trading, a trade every 4th minute & beta 1.0 & 0.93 (zeros in between: 0.33)\\
+Abnormal volume, 5$\times$ for 60 of 120 minutes & $\log 5 / 2 = 0.805$ & 0.811 ($t = 91.5$)\\
+Cross-correlation, independent noise & near 0 & $-0.008$; BMP t 0.600, KP t 0.608\\
+Cross-correlation, two of three events alike & $\bar r = 1/3$, factor $\sqrt{0.4}$ & 0.33333, 0.63246\\
+Generalized rank, CARs far out & large t & $t = 3.83$, $p = 0.0002$\\
+Generalized rank, CARs among the rest & no evidence & $t = 0.61$, $p = 0.55$\\
+FOMC: FF1 $-10$ cents on the 10th, scaled $30/20$ & 15 bp & 15 bp, to 9 decimals\\
+FOMC: 5-minute bars, FF1 $-5$ cents & 5 bp from minute 5 & mean path 7.5 bp at minute 1, 10 at 5\\
+\end{valuetable}
+The tests also check the groups, the files written, the events still capturing and a study without events.
+
+\nmsection{Panel event studies}
+Units of a panel first treated at different times (firms adopting a rule, states passing a law, hospitals joining a
+stepped-wedge trial) against units not yet or never treated. \fn{panel\_event\_study} takes any Tables.jl table, a row a
+unit and a time, and gives the effect at each event time (the time since the unit was first treated) from
+\fn{-leads} to \fn{lags}, against the \fn{reference} event time ($-1$ by default); event times beyond the ends count at
+the ends, and units treated from the first time are left out.
+
+\begingroup\footnotesize
+\begin{verbatim}
+results = panel_event_study(table; unit = "state", time = "year", outcome = "y",
+    cohort = "first_treated", leads = 5, lags = 5)
+report(results)
+\end{verbatim}
+\endgroup
+
+\nmsub{Three estimators}
+\begin{itemize}
+  \item \textbf{Two-way fixed effects (TWFE).} The outcome on unit and time effects and an indicator of each event time.
+    With effects that differ from cohort to cohort, its effects mix in those of other event times, before treatment
+    too, with weights that can be negative.
+  \item \textbf{Sun and Abraham (\nmcite{sun2021}{2021}).} Each cohort's effect at each event time against the control
+    units (\fn{control = "never"}, the units never treated, or \fn{"last"}, the units treated last, before their
+    treatment), averaged over the cohorts with their shares of the event time's observations.
+  \item \textbf{Callaway and Sant'Anna (\nmcite{cs2021}{2021}),} \fn{callaway\_santanna}. Each cohort's effect at each
+    time, ATT$(g, t)$, a difference in differences against the units never treated, not yet treated or treated last;
+    from a varying or a universal base period; doubly robust (Sant'Anna and Zhao \nmcite{sz2020}{2020}), by inverse
+    probability weighting or by outcome regression, with covariates; then aggregated by event time, by cohort, by
+    calendar time and overall, the standard errors counting the estimation of the cohorts' shares. It is a port of
+    R's did and DRDID.
+\end{itemize}
+Each result of \fn{panel\_event\_study} has the effects by event time, each cohort's, the pre-trends test (that the effects before the reference
+event time are all zero) and the sample. \fn{weights} weighs the observations and \fn{covariates} are added to both
+regressions. A study folder with \fn{source = "panel"} in \fn{study.toml} names the table, the same keywords and the estimators
+(\fn{estimators}: \fn{panel\_event\_study}, \fn{callaway\_santanna} or both), the second's own keywords in a
+\fn{[callaway\_santanna]} table, so that a study made on Pollis's Event Studies page can run either.
+
+\nmsub{Standard errors: three choices}
+Standard errors are clustered by \fn{cluster}, the unit by default. Three keywords set how, each with the package's
+choice as the default and R's as the other:
+\begin{itemize}
+  \item \fn{small\_sample} (\fn{true}): Stata's small-sample factor $\frac{G}{G-1}\frac{N-1}{N-K}$, $G$ the clusters,
+    $N$ the observations and $K$ the parameters, as fixest; \fn{false} leaves it out, as did.
+  \item \fn{fixed\_shares} (\fn{false}): Sun and Abraham's variance adds that of the cohorts' shares, which are
+    estimated too, clustered as the cohorts' effects, as did; \fn{true} holds the shares fixed,
+    as fixest.
+  \item \fn{distribution} (\fn{"t"}): p-values and the 95\% bands from Student's t with $G-1$ degrees of freedom, and
+    the pre-trends test as $F(q, G-1)$; \fn{"normal"} takes the normal and $\chi^2(q)$, as did.
+\end{itemize}
+
+\nmsub{t or the normal}
+The normal is asymptotic. The standard errors come from an influence function, which justifies the normal as the
+number of clusters grows; with 50 states it is a fair approximation. The t with $G-1$ degrees of freedom is a
+small-sample correction, Stata's convention, which fixest follows. With few clusters the clustered standard errors are
+themselves noisy, and the t's thicker tails allow for that. With 10 to 20 clusters the difference is real: with 15, the
+5\% critical value is 2.14 under $t(14)$ and 1.96 under the normal. With 50 it is 2.01, and with hundreds of clusters
+the two agree.
+
+\newpage
+\nmsub{Against R}
+R is the benchmark for these estimators. The tests run the package and R on the same synthetic panels: 60 units over
+12 years in three cohorts and a never-treated group, with effects that differ from cohort to cohort.
+\begin{valuetable}{@{}>{\raggedright\arraybackslash}p{43mm}>{\raggedright\arraybackslash}p{50mm}>{\raggedright\arraybackslash}X@{}}
+\textbf{R} & \textbf{Keywords} & \textbf{Equal to 6 decimals}\\\midrule
+fixest, \fn{sunab} and \fn{i()} & \fn{fixed\_shares = true} & 49 cohort and TWFE effects and standard errors, with weights, a covariate and clusters coarser than the units; 32 effects by event time and their standard errors; 14 with the last-treated control\\
+did (\nmcite{cs2021}{Callaway and Sant'Anna 2021}), \fn{att\_gt} (never treated, universal base period) and \fn{aggte(type = "dynamic")}, \fn{bstrap = FALSE, cband = FALSE} & \fn{small\_sample = false, distribution = "normal"} & 33 cohort effects; 16 effects by event time with their standard errors, p-values and 95\% bands\\
+did, \fn{att\_gt} and \fn{aggte} (dynamic, group, calendar, simple), \fn{bstrap = FALSE, cband = FALSE} & \fn{callaway\_santanna}, \fn{distribution = "normal"} & In six configurations (each control group, base period and method, with weights, a covariate, coarser clusters, anticipation, and with no units never treated): 164 cells, 85 effects by event time, 15 by cohort, 45 by calendar time and 24 overall, with their standard errors, to 5e-13; the pre-trends test; \fn{min\_e}, \fn{max\_e} and \fn{balance\_e}\\
+\end{valuetable}
+did is Sun and Abraham's estimator only with the never-treated control, a universal base period and no covariates.
+Its default bands are simultaneous, from a multiplier bootstrap; \fn{bstrap = FALSE, cband = FALSE} gives the pointwise
+bands compared here. Stata's eventstudyinteract takes the shares' variance observation by observation, which gives the
+same variance at each event time when each unit is a cluster and no event time is beyond the ends, but no covariance
+between event times. Not yet checked against R: the binned ends, the pre-trends test and the weighted last-treated
+control. The bootstraps are in the next section, and datasets with gaps in the one after.
+
+\nmsection{Bootstrap}
+The bootstrap serves the panel estimators three ways: standard errors that need no formula, bands that cover all the
+event times at once, and tests that hold with few clusters. Each takes \fn{draws} and \fn{seed}, to repeat the draws.
+\begin{valuetable}{@{}>{\raggedright\arraybackslash}p{36mm}>{\raggedright\arraybackslash}p{44mm}>{\raggedright\arraybackslash}X@{}}
+\textbf{Bootstrap} & \textbf{Keywords} & \textbf{What it gives}\\\midrule
+did's multiplier bootstrap & \fn{callaway\_santanna}: \fn{bootstrap = true}; \fn{panel\_event\_study}: \fn{uniform = true, multiplier = true} & Standard errors and simultaneous bands for Callaway and Sant'Anna; did's critical values for TWFE and Sun and Abraham\\
+Sup-t & \fn{panel\_event\_study}: \fn{uniform = true} & Simultaneous bands for TWFE and Sun and Abraham\\
+Wild cluster bootstrap & \fn{panel\_event\_study}: \fn{wild = true}, after \fn{using WildBootTests} & p-values and 95\% intervals for each effect, and the pre-trends test, with few clusters\\
+\end{valuetable}
+
+\nmsub{Simultaneous bands}
+A 95\% band at each event time covers that event time's effect 95\% of the time; drawn together on an event-study
+plot, the bands cover all the effects at once far less often. Simultaneous bands cover them all together 95\% of the
+time: each effect $\pm$ a critical value $c$ times its standard error, $c$ the 95\% quantile of the largest $|t|$ over
+the event times. The package draws that largest $|t|$ two ways.
+\begin{itemize}
+  \item \textbf{Sup-t} (Montiel Olea and Plagborg-M\o{}ller \nmcite{mop2019}{2019}), the default: from the effects'
+    estimated correlations, normal or Student's t as \fn{distribution} (10{,}000 draws by default).
+  \item \textbf{did's multiplier bootstrap}: each cluster's influence on the effects weighed by $+1$ or $-1$ in each
+    draw, each effect's draws scaled by their interquartile range over the normal's, and the pointwise value when the
+    simultaneous one is smaller, as did's \fn{aggte}. For \fn{callaway\_santanna} it also gives the standard errors.
+\end{itemize}
+On the test panel, Sun and Abraham's 16 event times under the normal give 2.777 by sup-t, between the pointwise 1.960
+and Bonferroni's 2.955. By did's multiplier bootstrap they give 2.706, and did itself 2.708 (200{,}000 draws each).
+The two ways differ by the weights alone: over 60 clusters, weights of $+1$ or $-1$ give the largest $|t|$ thinner tails
+than normal draws do, and normal weights on the same influences give 2.775. For \fn{callaway\_santanna}, with
+100{,}000 draws, the critical values and standard errors are did's within the noise of the draws (2.743 against 2.747
+for the event times, 0.1725 against 0.1729 for a cell's standard error).
+
+\nmsub{The wild cluster bootstrap}
+Clustered standard errors assume many clusters. With 10 to 30, tests on them reject too often, even with t's critical
+values (Cameron, Gelbach and Miller \nmcite{cgm2008}{2008}). The wild cluster bootstrap does better: it refits the
+regression with the null imposed, and in each draw multiplies each cluster's residuals by a single random weight, keeping
+their correlation within the cluster; the p-value is the share of the draws whose $|t|$ is at least the data's. The
+interval holds the values the test does not reject at 5\%. With \fn{wild = true}, each effect of TWFE and of Sun and
+Abraham has its p-value and interval, and the pre-trends test its p-value, a Wald test with the null imposed. The weights
+are $+1$ or $-1$ (\fn{wild\_weights = "rademacher"}), every one of the $2^G$ patterns of signs when there are no more
+than \fn{draws}, or Webb's (\nmcite{webb2023}{2023}) six values (\fn{"webb"}), better with fewer than about 12 clusters,
+whose $2^G$ patterns are then too few. Sun and Abraham's effects hold the cohorts' shares fixed. The bootstrap runs in
+David Roodman's WildBootTests.jl (Roodman, MacKinnon, Nielsen and Webb \nmcite{rmnw2019}{2019}), the algorithms of
+Stata's boottest, which the package loads only when asked for.
+
+Against R's fwildclusterboot (\fn{boottest} on fixest's \fn{i()} and \fn{sunab}), on the test panel with weights, a
+covariate and 12 clusters, so that all 4{,}096 patterns are drawn: the p-values are R's to 6 decimals (0.032715 for TWFE
+at event time $-2$, 134 of the 4{,}096 draws; 0.966309 for Sun and Abraham). The p-value is a step function of the
+value tested, and the interval's bound is where it falls below 5\%. Neither program finds that point exactly: TWFE's
+upper bound at event time 3 is 1.158875, R stops its root search after 10 iterations at 1.158985, and WildBootTests
+stops within a step of 5\% at 1.159517. Both are on the step past the bound, so the intervals agree to its width, here
+0.0005.
+
+\nmsection{Unbalanced datasets}
+Real panels have gaps: a firm enters the sample late, leaves it, or misses a year of data. A panel is unbalanced when
+some units are not observed at every time. Gaps do not bias the estimates when they are unrelated to the outcome; when
+units leave because of how they fare, no estimator here corrects that.
+
+\nmsub{TWFE and Sun and Abraham}
+\fn{panel\_event\_study} needs no option. Its regression takes every observation there is, and the unit and time
+effects absorb who is present when. On a panel where half the 60 units miss a year or two, it agrees with fixest to 6
+decimals, effects and standard errors, with weights, a covariate and clusters coarser than the units.
+
+\nmsub{Callaway and Sant'Anna}
+Each ATT(g, t) is a change from the base period to t, which a unit missing at either time does not have. By default,
+as in did, \fn{callaway\_santanna} leaves out every unit not observed at every time, and the report says how many.
+With \fn{unbalanced = true}, as did's \fn{allow\_unbalanced\_panel}, it keeps them:
+\begin{itemize}
+  \item each cell compares the observations at t and at the base period as two cross sections, with the estimators of
+    \nmcite{sz2020}{Sant'Anna and Zhao 2020} for repeated cross sections (DRDID's \fn{drdid\_rc}, \fn{std\_ipw\_did\_rc}
+    and \fn{reg\_did\_rc}), each observation with its own covariates and weight;
+  \item a unit's influence is the sum of its observations', so the standard errors, clustered or bootstrapped, still
+    treat a unit's observations as one;
+  \item the cohorts' sizes weigh each unit by the mean of its weights.
+\end{itemize}
+When every unit is observed at every time, the option changes nothing. Keeping the units with gaps keeps their
+information, but each cell no longer differences a unit's outcome against itself, which costs precision when units
+differ a lot. On the same panel the effect at event time 0, whose true value is $(0.4 + 2.0 - 1.0)/3 \approx 0.467$:
+\begin{valuetable}{@{}lll@{}}
+\textbf{Panel} & \textbf{Effect at 0} & \textbf{Standard error}\\\midrule
+The 30 units with gaps left out (default) & 0.380 & 0.259\\
+All 60 units, \fn{unbalanced = true} & 0.494 & 0.196\\
+The full panel, without gaps & 0.468 & 0.187\\
+\end{valuetable}
+Against did 2.5.1 with \fn{allow\_unbalanced\_panel = TRUE}, in five configurations (each method, the not-yet-treated
+control, a universal base period, weights, a covariate and coarser clusters), the cells, the effects by event time, by
+cohort and overall, their standard errors and the pre-trends test are equal to 6 decimals.
+
+\nmsection{Still open}
+\begin{itemize}
+  \item \textbf{A published table.} Every test is synthetic. The package needs an intraday study whose events and
+    results are published and whose prices can be had today, to be tested against as the other packages are.
+  \item \textbf{Estimation days.} Pollis captures them for the market model only, so market-adjusted studies have no
+    standardized tests (BMP, its adjustment and the generalized rank test) unless the prices before the period happen
+    to be there.
+  \item \textbf{Panel Event Studies in Pollis.} The package has them; the Event Studies page and a notebook for them
+    are still to come.
+\end{itemize}
+
+\nmsection{References}
+{\footnotesize
+\nmref{bmp1991}{Boehmer, E., Musumeci, J. and Poulsen, A.\,B. (1991). Event-study methodology under conditions of event-induced variance. \emph{Journal of Financial Economics} 30(2), 253--272. \nmdoi{10.1016/0304-405X(91)90032-F}}
+\nmref{cs2021}{Callaway, B. and Sant'Anna, P.\,H.\,C. (2021). Difference-in-differences with multiple time periods. \emph{Journal of Econometrics} 225(2), 200--230.\newline \nmdoi{10.1016/j.jeconom.2020.12.001}}
+\nmref{cgm2008}{Cameron, A.\,C., Gelbach, J.\,B. and Miller, D.\,L. (2008). Bootstrap-based improvements for inference with clustered errors. \emph{Review of Economics and Statistics} 90(3), 414--427. \nmdoi{10.1162/rest.90.3.414}}
+\nmref{ffjr1969}{Fama, E.\,F., Fisher, L., Jensen, M.\,C. and Roll, R. (1969). The adjustment of stock prices to new information. \emph{International Economic Review} 10(1), 1--21.}
+\nmref{kp2010}{Kolari, J.\,W. and Pynn\"onen, S. (2010). Event study testing with cross-sectional correlation of abnormal returns. \emph{Review of Financial Studies} 23(11), 3996--4025. \nmdoi{10.1093/rfs/hhq072}}
+\nmref{kp2011}{Kolari, J.\,W. and Pynn\"onen, S. (2011). Nonparametric rank tests for event studies. \emph{Journal of Empirical Finance} 18(5), 953--971.\newline \nmdoi{10.1016/j.jempfin.2011.08.003}}
+\nmref{kuttner2001}{Kuttner, K.\,N. (2001). Monetary policy surprises and interest rates: evidence from the Fed funds futures market. \emph{Journal of Monetary Economics} 47(3), 523--544. \nmdoi{10.1016/S0304-3932(01)00055-1}}
+\nmref{mackinlay1997}{MacKinlay, A.\,C. (1997). Event studies in economics and finance. \emph{Journal of Economic Literature} 35(1), 13--39.}
+\nmref{mop2019}{Montiel Olea, J.\,L. and Plagborg-M\o{}ller, M. (2019). Simultaneous confidence bands: Theory, implementation, and an application to SVARs. \emph{Journal of Applied Econometrics} 34(1), 1--17. \nmdoi{10.1002/jae.2656}}
+\nmref{rmnw2019}{Roodman, D., MacKinnon, J.\,G., Nielsen, M.\,\O{}. and Webb, M.\,D. (2019). Fast and wild: Bootstrap inference in Stata using boottest. \emph{Stata Journal} 19(1), 4--60. \nmdoi{10.1177/1536867X19830877}}
+\nmref{sz2020}{Sant'Anna, P.\,H.\,C. and Zhao, J. (2020). Doubly robust difference-in-differences estimators. \emph{Journal of Econometrics} 219(1), 101--122.\newline \nmdoi{10.1016/j.jeconom.2020.06.003}}
+\nmref{sun2021}{Sun, L. and Abraham, S. (2021). Estimating dynamic treatment effects in event studies with heterogeneous treatment effects. \emph{Journal of Econometrics} 225(2), 175--199. \nmdoi{10.1016/j.jeconom.2020.09.006}}
+\nmref{webb2023}{Webb, M.\,D. (2023). Reworking wild bootstrap-based inference for clustered errors. \emph{Canadian Journal of Economics} 56(3), 839--858. \nmdoi{10.1111/caje.12661}}
+\nmref{software}{Software: Kaspereit, T., eventstudy2 (Stata); EventStudy.jl (MIT), \url{https://github.com/florian-st/EventStudy.jl}; Berg\'e, L., fixest (R); Callaway, B. and Sant'Anna, P.\,H.\,C., did (R); Sant'Anna, P.\,H.\,C. and Zhao, J., DRDID (R); Sun, L., eventstudyinteract (Stata); Roodman, D., WildBootTests.jl (MIT), \url{https://github.com/droodman/WildBootTests.jl}; Fischer, A. and Roodman, D., fwildclusterboot (R).}
+}
+
+\nmcredit
+\end{document}

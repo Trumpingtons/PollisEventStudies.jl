@@ -194,6 +194,10 @@ agrees with did to 6 decimals in five configurations (each method, the not-yet-t
 weights, a covariate and coarser clusters). `panel_event_study` needs no option: its regression takes every observation,
 and it agrees with fixest on the same panel.
 
+## Vignette
+
+[Market Event Studies: filings and FOMC releases, a minute at a time](vignette/PollisEventStudies.pdf)
+
 ## License
 
 MIT

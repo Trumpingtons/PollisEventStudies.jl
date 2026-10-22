@@ -1,0 +1,115 @@
+% Shared look for the Pollis New Methods documents (same fonts and colours as the brochure and the workflow handouts).
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[a4paper,left=18mm,right=18mm,top=15mm,bottom=17mm,footskip=8mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[default,semibold]{sourcesanspro}
+\usepackage{textcomp}
+\usepackage[italic]{mathastext}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage[table]{xcolor}
+\usepackage{tikz}
+\usepackage[most]{tcolorbox}
+\usepackage{fontawesome5}
+\usepackage{tabularx,booktabs}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage[hidelinks]{hyperref}
+
+% ---------------------------------------------------------------- colours (as in the brochure)
+\definecolor{navy}{HTML}{1C3A5E}
+\definecolor{pblue}{HTML}{3B78B5}
+\definecolor{amber}{HTML}{F2B33D}
+\definecolor{deepamber}{HTML}{D9902A}
+\definecolor{pale}{HTML}{EEF3F9}
+\definecolor{ink}{HTML}{2A2F36}
+\definecolor{logonavy}{HTML}{173D63}
+\definecolor{logodark}{HTML}{C98A1E}
+\definecolor{logoamber}{HTML}{F2B446}
+\definecolor{logocream}{HTML}{FEEFD2}
+\definecolor{soft}{HTML}{5E6773}
+\definecolor{agree}{HTML}{2F7D4F}
+\definecolor{differ}{HTML}{B23B3B}
+\color{ink}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4pt}
+\setlist{nosep,leftmargin=*,itemsep=2pt}
+\renewcommand{\arraystretch}{1.15}
+
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\fancyfoot[L]{\footnotesize\color{soft}\textbf{Pollis}\enspace New Methods\enspace·\enspace\nmtheme}
+\fancyfoot[R]{\footnotesize\color{soft}\thepage}
+\newcommand{\nmtheme}{}
+\newcommand{\nmdate}{11 October 2026}
+
+% The Pollis logo, redrawn so it prints sharply at any size
+\newcommand{\pollislogo}[1]{%
+  \begin{tikzpicture}[x=#1/512,y=-#1/512,baseline=(current bounding box.center)]
+    \fill[logonavy] (0,0) rectangle (512,512);
+    \fill[logodark] (36,422) -- (104,256) -- (172,422) -- cycle;
+    \fill[logoamber] (104,422) -- (203,180) -- (302,422) -- cycle;
+    \fill[logocream] (203,422) -- (339,89) -- (476,422) -- cycle;
+  \end{tikzpicture}}
+
+% Top of the first page: logo, name; then the kicker, title and a one-line promise
+\newcommand{\nmhead}[3]{%
+  \renewcommand{\nmtheme}{#1}%
+  \thispagestyle{fancy}%
+  \begin{minipage}[c]{13mm}\pollislogo{11mm}\end{minipage}%
+  \begin{minipage}[c]{\dimexpr\linewidth-13mm\relax}
+    {\color{navy}\Large\bfseries Pollis}\enspace{\color{soft}New Methods}\hfill
+    {\color{deepamber}\small\bfseries\MakeUppercase{#1}}
+  \end{minipage}\par\vspace{7mm}
+  {\color{navy}\fontsize{22}{26}\selectfont\bfseries #2}\par\vspace{4pt}
+  {\color{soft}\large #3}\par\vspace{5mm}}
+
+\newcommand{\nmsection}[1]{\par\vspace{5pt}{\color{navy}\large\bfseries #1}\par\vspace{1pt}}
+\newcommand{\nmsub}[1]{\par\vspace{2pt}{\color{deepamber}\bfseries #1}\par}
+\newcommand{\gt}{\,{\color{deepamber}\bfseries ›}\,}
+\newcommand{\menupath}[1]{{\bfseries\color{navy}#1}}
+\newcommand{\fn}[1]{\texttt{\small #1}}
+% Citations: \nmcite{key}{Breiman (2001)} links to the entry \nmref{key}{...} in the References
+\newcommand{\nmcite}[2]{\hyperlink{ref:#1}{\color{pblue}#2}}
+\newcommand{\nmref}[2]{\raisebox{1.1em}[0pt][0pt]{\hypertarget{ref:#1}{}}#2\par}
+\newcommand{\nmdoi}[1]{\href{https://doi.org/#1}{\color{pblue}doi:#1}}
+% Where a notebook is in Pollis: its title in Browse Methods, and its file
+\newcommand{\browse}[2]{\menupath{Compose \gt New Methods \gt Browse Methods}: \emph{#1} (\fn{#2.ipynb})}
+
+% Key facts at the top: source, missing in Julia, notebook, result
+\newcommand{\factsheet}[4]{%
+  \begin{tcolorbox}[enhanced, colback=pale, colframe=pale, boxrule=0pt, sharp corners,
+    left=7pt, right=7pt, top=5pt, bottom=5pt, fontupper=\small]
+  \begin{tabularx}{\linewidth}{@{}>{\leavevmode\bfseries\color{navy}}p{27mm}>{\leavevmode}X@{}}
+  Tested against & #1\\
+  Missing in Julia & #2\\
+  Notebook & #3\\
+  Result & #4
+  \end{tabularx}
+  \end{tcolorbox}}
+
+% Boxes
+\newtcolorbox{pbox}[2][]{enhanced, colback=pale, colframe=amber, boxrule=0pt,
+  leftrule=3pt, sharp corners, left=7pt, right=7pt, top=6pt, bottom=6pt,
+  fontupper=\small\raggedright, before upper={{\color{navy}\normalsize\bfseries #2}\par\smallskip}, #1}
+\newtcolorbox{nbox}[2][]{enhanced, colback=navy, colframe=navy, boxrule=0pt,
+  sharp corners, left=8pt, right=8pt, top=7pt, bottom=7pt, coltext=white,
+  fontupper=\small\raggedright, before upper={{\color{amber}\normalsize\bfseries #2}\par\smallskip}, #1}
+
+% Value tables: published beside Julia
+\newenvironment{valuetable}[1]{%
+  \par\small\tabularx{\linewidth}{#1}\toprule}{\bottomrule\endtabularx\par}
+\newcommand{\ok}{{\color{agree}\faCheck}}
+\newcommand{\no}{{\color{differ}\faTimes}}
+
+% End of the document: credit and licence
+\newcommand{\nmcredit}{%
+  \par\vfill
+  \begin{minipage}[b]{0.78\linewidth}\footnotesize\color{soft}
+  Methods written and tested with Claude Code (Anthropic) in Pollis, from the published papers and their data.\par
+  \textcopyright\ 2026 Antonio Saragga Seabra\enspace·\enspace Licensed under \href{https://creativecommons.org/licenses/by-sa/4.0/}{CC BY-SA 4.0}\enspace·\enspace Draft, \nmdate
+  \end{minipage}\hfill
+  \begin{minipage}[b]{0.18\linewidth}\raggedleft\pollislogo{9mm}\par\vspace{2pt}{\footnotesize contact@pollis.org}\end{minipage}}

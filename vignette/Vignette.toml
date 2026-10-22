@@ -1,0 +1,14 @@
+# The vignette of PollisEventStudies.jl, shown in Help > Documentation > Vignettes once the package is installed.
+
+article = ""
+author = "Antonio Saragga Seabra"
+citation = ""
+description = "Intraday event studies of SEC filings and of the FOMC's releases on the minute prices Pollis captures: market-adjusted or market-model abnormal returns, AAR and CAAR with their tests, abnormal volume; and panel event studies (TWFE, Sun and Abraham, Callaway and Sant'Anna) with bootstraps and unbalanced panels, checked against R."
+license = "MIT"
+method = "Market and panel event studies"
+package = "PollisEventStudies"
+pdf = "PollisEventStudies.pdf"
+repository = "https://github.com/Trumpingtons/PollisEventStudies.jl"
+title = "Market Event Studies: filings and FOMC releases, a minute at a time"
+topic = "Event Studies"
+version = "0.4.0"
