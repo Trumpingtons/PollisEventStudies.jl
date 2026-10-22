@@ -1,4 +1,4 @@
-using PollisEventStudies, Test, Random, Dates, CSV, Tables
+using PollisEventStudies, Test, Random, Dates, CSV, Tables, WildBootTests
 
 const BENCHMARK = "^GSPC"
 const DAYS = Date.(2026, 10, [12, 13, 14, 15, 16, 19, 20])
@@ -124,6 +124,29 @@ const EVENTS = [
     (accession = "E2", ticker = "BBB", accepted = DateTime(2026, 10, 16, 21, 30, 10), during = "false", next_open = DateTime(2026, 10, 19, 14, 30), jump = -0.03, beta = 0.8),
     (accession = "E3", ticker = "CCC", accepted = DateTime(2026, 10, 20, 15, 0, 0), during = "true", next_open = nothing, jump = 0.01, beta = 1.0),
 ]
+
+"""
+A panel of `units` units over the years 1 to 12: `cohort(i)` the year unit i is first treated (0 for never) and
+`effect(e, l)` the effect on cohort e at event time l, from 0, or before it with a pre-trend; the noise is a function
+of the unit and the year, the same on every machine.
+"""
+function synthetic_panel(cohort, effect; units = 60, years = 1:12)
+    rows = (; unit = String[], year = Int[], y = Float64[], first = Int[], w = Float64[], x = Float64[], region = String[])
+    for i in 1:units, t in years
+        e = cohort(i)
+        x = cos(1.3i + 0.7t)
+        push!(rows.unit, "u$i"); push!(rows.year, t); push!(rows.first, e); push!(rows.x, x)
+        push!(rows.w, 1 + 0.5 * mod(i, 3)); push!(rows.region, "r$(mod(i, 12))")
+        push!(rows.y, sin(i) + 0.2t + 0.5x + (e == 0 ? 0.0 : effect(e, t - e)) + 0.05 * sin(3.1i * t + i))
+    end
+    rows
+end
+# Three cohorts and units never treated, with effects that differ from cohort to cohort
+STAGGERED = synthetic_panel(i -> i <= 15 ? 4 : i <= 30 ? 7 : i <= 45 ? 9 : 0,
+    (e, l) -> l < 0 ? 0.0 : e == 4 ? 0.4 * (l + 1) : e == 7 ? 2.0 : -1.0)
+# The same, unbalanced: the even units miss a year or two
+GAPS = map(c -> c[[(i = parse(Int, STAGGERED.unit[k][2:end]); isodd(i) || mod(7i + 3 * STAGGERED.year[k], 11) != 0)
+    for k in eachindex(STAGGERED.unit)]], STAGGERED)
 
 @testset "PollisEventStudies" begin
     @testset "market model" begin
@@ -288,5 +311,233 @@ const EVENTS = [
         results = analyse(read_study(folder))
         @test length(results) == 1 && results[1].period.name == "Default" && results[1].from_filing === nothing
         @test occursin("0 events with prices", sprint(report, results))
+    end
+
+    @testset "panel event studies" begin
+        options = (; unit = "unit", time = "year", outcome = "y", cohort = "first", leads = 8, lags = 8)
+        study(table; changes...) = panel_event_study(table; merge(options, changes)...)
+        rounded(x) = round(x; digits = 6)
+        cell(table, keys...) = findfirst(k -> all(getproperty(table, name)[k] == value for (name, value) in keys), eachindex(table.event_time))
+
+        # R's fixest, feols(y ~ x + sunab(cohort, year, ref.p = -1) | unit + year, weights = ~w, cluster = ~region) and
+        # its i(rel) two-way fixed effects, on the same panel: each cohort's effect, the TWFE effects and their standard errors
+        weighted = study(STAGGERED; weights = "w", covariates = ["x"], cluster = "region")
+        cohort_rows = [cell(weighted.cohorts, :cohort => c, :event_time => l) for (c, l) in ((9, -8), (4, -3), (7, -2), (4, 0), (7, 0))]
+        event_rows = [cell(weighted.effects, :event_time => l) for l in (-8, -2, 0, 4, 8)]
+        @test [rounded.((weighted.cohorts.effect[k], weighted.cohorts.se[k])) for k in cohort_rows] ==
+            [(0.010423, 0.019092), (0.008481, 0.011561), (-0.013831, 0.01562), (0.395517, 0.019796), (1.990594, 0.013136)]
+        @test [rounded.((weighted.effects.twfe_effect[k], weighted.effects.twfe_se[k])) for k in event_rows] ==
+            [(1.316918, 0.036649), (0.03789, 0.015169), (0.456324, 0.056954), (1.759524, 0.047242), (4.162545, 0.050693)]
+        # and on the panel with gaps
+        gappy = study(GAPS; weights = "w", covariates = ["x"], cluster = "region")
+        @test ([(k = cell(gappy.effects, :event_time => l); rounded.((gappy.effects.twfe_effect[k], gappy.effects.twfe_se[k])))
+                for l in (-8, 0, 8)],
+            [(k = cell(gappy.cohorts, :cohort => c, :event_time => l); rounded.((gappy.cohorts.effect[k], gappy.cohorts.se[k])))
+                for (c, l) in ((9, -8), (7, 0))]) ==
+            ([(1.305337, 0.037126), (0.449751, 0.055236), (4.139462, 0.047372)], [(0.004666, 0.021067), (1.985342, 0.012569)])
+        # and its aggregated effects, the cohorts' shares held fixed
+        fixed = study(STAGGERED; weights = "w", covariates = ["x"], cluster = "region", fixed_shares = true)
+        rows = [cell(fixed.effects, :event_time => l) for l in (-2, 0, 3, 8)]
+        @test [rounded.((fixed.effects.sa_effect[k], fixed.effects.sa_se[k])) for k in rows] ==
+            [(-0.00045, 0.012806), (0.464758, 0.010749), (0.862334, 0.015045), (3.608945, 0.020174)]
+
+        # R's did, att_gt(control_group = "nevertreated", base_period = "universal") and aggte(type = "dynamic"),
+        # without a small-sample factor: the effect at each event time, and its standard error with the variance of the
+        # cohorts' shares
+        unweighted = study(STAGGERED; small_sample = false)
+        rows = [cell(unweighted.effects, :event_time => l) for l in (-8, -2, 0, 3, 8)]
+        @test [rounded.((unweighted.effects.sa_effect[k], unweighted.effects.sa_se[k])) for k in rows] ==
+            [(-0.002116, 0.163785), (0.004404, 0.040237), (0.468011, 0.186927), (0.871297, 0.228423), (3.617982, 0.018838)]
+        # and, with the normal as did, its p-values and 95% bands (aggte(bstrap = FALSE, cband = FALSE))
+        normal = study(STAGGERED; small_sample = false, distribution = "normal")
+        rows = [cell(normal.effects, :event_time => l) for l in (-2, 0, 3)]
+        @test [rounded.((normal.effects.sa_p[k], normal.effects.sa_low[k], normal.effects.sa_high[k])) for k in rows] ==
+            [(0.912849, -0.074459, 0.083267), (0.01229, 0.101641, 0.834380), (0.000137, 0.423597, 1.318997)]
+        @test normal.pretrends.test == ["chi2", "chi2"] && all(ismissing, normal.pretrends.df2) && normal.pretrends.p[2] > 0.5
+        @test_throws ArgumentError study(STAGGERED; distribution = "z")
+
+        # Sup-t bands, simultaneous over the 16 event times: wider than pointwise, narrower than Bonferroni's (2.955);
+        # 2.775 and 2.777 with 200,000 draws (did's multiplier bootstrap, its weights +1 or -1 over the 60 clusters, gives 2.708)
+        uniform = study(STAGGERED; small_sample = false, distribution = "normal", uniform = true, draws = 20000, seed = 1)
+        c = uniform.sample.critical
+        @test isapprox(c.twfe, 2.775; atol = 0.03) && isapprox(c.sa, 2.777; atol = 0.03)
+        known = findall(!ismissing, uniform.effects.sa_effect)
+        @test isapprox(uniform.effects.sa_high[known] .- uniform.effects.sa_effect[known], c.sa .* uniform.effects.sa_se[known])
+        @test isequal(uniform.effects.sa_effect, normal.effects.sa_effect)
+        @test study(STAGGERED; small_sample = false, distribution = "normal", uniform = true, draws = 20000, seed = 1).sample.critical == c
+        # Under t, heavier tails; with a single event time, the pointwise value
+        @test study(STAGGERED; uniform = true, seed = 1).sample.critical.sa > c.sa
+        @test study(STAGGERED; leads = 1, lags = 0, distribution = "normal", uniform = true).sample.critical.sa |> x -> round(x; digits = 6) == 1.959964
+        @test_throws ArgumentError study(STAGGERED; uniform = true, draws = 10)
+        # did's multiplier bootstrap in place of the sup-t: 2.706 with 200,000 draws, did's 2.708
+        did_bands = study(STAGGERED; small_sample = false, distribution = "normal", uniform = true, multiplier = true,
+            draws = 20000, seed = 1)
+        @test isapprox(did_bands.sample.critical.sa, 2.708; atol = 0.03)
+        @test_throws ArgumentError study(STAGGERED; multiplier = true)
+
+        # R's fwildclusterboot, boottest(type = "rademacher", B = 9999) on fixest's i(rel) and sunab(no_agg = TRUE) with
+        # the unit and year effects as indicators, Sun and Abraham's effect the shares' combination of the cohorts': with 12
+        # clusters, all 4,096 patterns of signs, so the p-values are R's. The intervals' bounds are where the p-value, a step
+        # function, falls below 0.05: TWFE's at 3, 1.158875; WildBootTests stops within a step of 0.05 (1.159517), R's
+        # uniroot after 10 iterations (1.158985), both on the step past the bound
+        wild = study(STAGGERED; weights = "w", covariates = ["x"], cluster = "region", fixed_shares = true, wild = true)
+        rows = [cell(wild.effects, :event_time => l) for l in (-2, 0, 3)]
+        @test wild.sample.wild_draws == 4096
+        @test [rounded.((wild.effects.twfe_wild_p[k], wild.effects.sa_wild_p[k])) for k in rows] ==
+            [(0.032715, 0.966309), (0.0, 0.0), (0.0, 0.0)]
+        intervals = [(wild.effects.twfe_wild_low[k], wild.effects.twfe_wild_high[k], wild.effects.sa_wild_low[k],
+            wild.effects.sa_wild_high[k]) for k in rows]
+        @test all(isapprox.(collect.(intervals), [[0.003463, 0.072763, -0.030166, 0.026207],
+            [0.326269, 0.586258, 0.441556, 0.488692], [0.916298, 1.158985, 0.828199, 0.892420]]; atol = 1e-3))
+        @test wild.pretrends.wild_p[1] < 0.001 && wild.pretrends.wild_p[2] > 0.5
+        @test_throws ArgumentError study(STAGGERED; wild = true, wild_weights = "mammen")
+        # Webb's weights, against boottest(type = "webb", B = 999999): 6^12 patterns are too many to enumerate, so both
+        # draw at random, and TWFE's p-values and intervals agree within the noise of the draws
+        webb = study(STAGGERED; weights = "w", covariates = ["x"], cluster = "region", fixed_shares = true, wild = true,
+            wild_weights = "webb", draws = 99999, seed = 1)
+        rows = [cell(webb.effects, :event_time => l) for l in (-2, 0, 3)]
+        @test webb.sample.wild_draws == 99999 && all(isapprox.(
+            [[webb.effects.twfe_wild_p[k], webb.effects.twfe_wild_low[k], webb.effects.twfe_wild_high[k]] for k in rows],
+            [[0.030189, 0.003807, 0.072266], [0.000086, 0.326607, 0.58471], [0.000017, 0.918462, 1.159012]]; atol = 2e-3))
+
+        # Effects that differ from cohort to cohort: Sun and Abraham recovers them, averaged over the cohorts at each event
+        # time; TWFE mixes them in, before treatment too
+        result = study(STAGGERED)
+        effect(c, l) = c == 4 ? 0.4 * (l + 1) : c == 7 ? 2.0 : -1.0
+        present(l) = [c for c in (4, 7, 9) if 1 <= c + l <= 12]
+        truth = Dict(l => l < 0 ? 0.0 : sum(effect(c, l) for c in present(l)) / length(present(l)) for l in result.effects.event_time)
+        known = findall(!ismissing, result.effects.sa_effect)
+        @test maximum(abs(result.effects.sa_effect[k] - truth[result.effects.event_time[k]]) for k in known) < 0.05
+        @test result.pretrends.p[1] < 1e-6 && result.pretrends.p[2] > 0.5
+        @test (result.sample.observations, result.sample.units, result.sample.cohorts, result.sample.never_treated) == (720, 60, [4, 7, 9], 15)
+
+        # The same with a treatment column in place of the cohorts
+        treated = merge(STAGGERED, (; d = [e != 0 && t >= e ? 1 : 0 for (e, t) in zip(STAGGERED.first, STAGGERED.year)]))
+        @test isequal(study(treated; cohort = nothing, treatment = "d").effects, result.effects)
+
+        # Without units never treated, those treated last are the control, before their treatment
+        some = findall(!=(0), STAGGERED.first)
+        last_treated = study(map(column -> column[some], STAGGERED))
+        @test last_treated.sample.control == "treated last (9), before their treatment" && last_treated.sample.observations == 45 * 8
+        @test_throws ArgumentError study(map(column -> column[some], STAGGERED); control = "never")
+
+        # Units treated from the first year are left out; event times beyond the ends count at the ends
+        early = merge(STAGGERED, (; first = [u in ("u1", "u2") ? 1 : e for (u, e) in zip(STAGGERED.unit, STAGGERED.first)]))
+        binned = study(early; leads = 3, lags = 2)
+        @test binned.sample.dropped == 2 && binned.effects.event_time == [-3, -2, 0, 1, 2]
+        # At -3, the years 3 or more before treatment: a year of each of cohort 4's 13 units, 4 of cohort 7's 15
+        # and 6 of cohort 9's; at 2, the years 2 or more after: 7, 4 and 2
+        @test binned.effects.observations == [13 + 4 * 15 + 6 * 15, 43, 43, 43, 7 * 13 + 4 * 15 + 2 * 15]
+
+        # A cohort whose outcome moves before its treatment fails Sun and Abraham's pre-trends test
+        pretrend = synthetic_panel(i -> i <= 30 ? 6 : 0, (e, l) -> l < 0 ? 0.3 * l : 1.0)
+        @test study(pretrend).pretrends.p[2] < 1e-6
+
+        # A study folder
+        folder = mktempdir()
+        CSV.write(joinpath(folder, "panel.csv"), STAGGERED)
+        write(joinpath(folder, "study.toml"), """
+            title = "Staggered"
+            source = "panel"
+            unit = "unit"
+            time = "year"
+            outcome = "y"
+            cohort = "first"
+            leads = 8
+            lags = 8
+            estimators = ["panel_event_study", "callaway_santanna"]
+
+            [callaway_santanna]
+            control = "notyet"
+            """)
+        output = mktemp() do path, io
+            redirect_stdout(() -> run_study(folder), io)
+            close(io)
+            read(path, String)
+        end
+        @test occursin("720 observations of 60 units in 60 clusters; cohorts 4, 7, 9; 15 never treated", output)
+        @test occursin("Callaway and Sant'Anna: 60 units in 60 clusters, times 1 to 12; cohorts 4, 7, 9; control: not yet treated", output)
+        @test sort(readdir(joinpath(folder, "results"))) == ["cs-calendar.csv", "cs-cells.csv", "cs-cohorts.csv", "cs-effects.csv",
+            "cs-overall.csv", "cs-pretrends.csv", "panel-cohorts.csv", "panel-effects.csv", "panel-pretrends.csv"]
+    end
+    @testset "Callaway and Sant'Anna" begin
+        options = (; unit = "unit", time = "year", outcome = "y", cohort = "first", distribution = "normal")
+        estimate(table; changes...) = callaway_santanna(table; merge(options, changes)...)
+        rounded(x) = round(x; digits = 6)
+        pair(table, key, value) = (k = findfirst(==(value), getproperty(table, key)); rounded.((table.effect[k], table.se[k])))
+        overall(r) = [pair(r.overall, :aggregation, a) for a in ("simple", "event time", "cohort", "calendar")]
+        treated = map(c -> c[findall(!=(0), STAGGERED.first)], STAGGERED)
+
+        # R's did 2.5.1, att_gt(bstrap = FALSE, cband = FALSE) and aggte(na.rm = TRUE): units never treated, varying base
+        # period, doubly robust; each cohort's effect at a time, by event time, by cohort, by time and overall
+        r = estimate(STAGGERED)
+        cells = [(k = findfirst(j -> r.cells.cohort[j] == g && r.cells.time[j] == t, eachindex(r.cells.effect));
+            rounded.((r.cells.effect[k], r.cells.se[k]))) for (g, t) in ((7, 5), (7, 8))]
+        @test (cells, [pair(r.effects, :event_time, e) for e in (-2, 0, 3)], pair(r.cohorts, :cohort, 7), pair(r.cohorts, :cohort, 9),
+            pair(r.calendar, :time, 7), pair(r.calendar, :time, 9), overall(r)) ==
+            ([(0.010675, 0.089612), (1.996347, 0.170597)], [(-0.000241, 0.040001), (0.468011, 0.186927), (0.871297, 0.228423)],
+            (1.987975, 0.175934), (-1.004267, 0.170014), (1.823025, 0.149978), (1.15345, 0.262189),
+            [(1.378301, 0.178019), (1.843945, 0.112472), (1.004826, 0.227898), (1.293065, 0.135885)])
+        # event times from -3 to 3 (min_e, max_e), and those of the cohorts seen 2 periods after treatment (balance_e)
+        @test (overall(estimate(STAGGERED; leads = 3, lags = 3)), pair(estimate(STAGGERED; balance = 2).overall, :aggregation, "event time")) ==
+            ([(0.670013, 0.20092), (0.670013, 0.20092), (0.670013, 0.20092), (1.293065, 0.135885)], (0.602918, 0.196206))
+        # units not yet treated, universal base period, a covariate, weights and clusters coarser than the units: no
+        # pre-trends test, as did, the covariance of the 14 cells before treatment being singular with 12 clusters
+        r = estimate(STAGGERED; control = "notyet", base_period = "universal", covariates = ["x"], weights = "w", cluster = "region")
+        @test ([pair(r.effects, :event_time, e) for e in (-3, 2)], overall(r), r.pretrends.df1, ismissing(r.pretrends.p)) ==
+            ([(0.003828, 0.070708), (0.732151, 0.062883)],
+            [(1.36834, 0.075432), (1.832825, 0.040267), (1.000777, 0.097618), (1.276919, 0.054015)], 14, true)
+        # inverse probability weighting, and the outcome regression
+        @test (pair(estimate(STAGGERED; method = "ipw", covariates = ["x"], weights = "w").effects, :event_time, 1),
+            pair(estimate(STAGGERED; method = "ipw", covariates = ["x"], weights = "w").overall, :aggregation, "simple"),
+            pair(estimate(STAGGERED; method = "reg", base_period = "universal", covariates = ["x"]).effects, :event_time, 2),
+            pair(estimate(STAGGERED; method = "reg", base_period = "universal", covariates = ["x"]).overall, :aggregation, "simple")) ==
+            ((0.591926, 0.199742), (1.367705, 0.165604), (0.736868, 0.195334), (1.371606, 0.160481))
+        # no units never treated: the last cohort, before its treatment, and units not yet treated with a year's anticipation
+        last = estimate(treated; covariates = ["x"])
+        notyet = estimate(treated; control = "notyet", anticipation = 1)
+        @test (pair(last.effects, :event_time, 0), pair(last.overall, :aggregation, "simple"), rounded(last.pretrends.statistic),
+            pair(notyet.effects, :event_time, 0), pair(notyet.overall, :aggregation, "simple"), rounded(notyet.pretrends.statistic)) ==
+            ((1.195519, 0.156497), (1.42411, 0.078378), 0.562784, (1.199719, 0.185252), (1.192297, 0.172061), 0.551189)
+        @test_throws ArgumentError estimate(STAGGERED; method = "ols")
+
+        # An unbalanced panel: half the units miss a year or two. R's did with allow_unbalanced_panel = TRUE, the cells
+        # as repeated cross sections, doubly robust, then with units not yet treated, a universal base period, a
+        # covariate, weights and clusters, inverse probability weighting and the outcome regression
+        gaps = GAPS
+        g7(r) = [(k = findfirst(j -> r.cells.cohort[j] == 7 && r.cells.time[j] == t, eachindex(r.cells.effect));
+            rounded.((r.cells.effect[k], r.cells.se[k]))) for t in (5, 8)]
+        r = estimate(gaps; unbalanced = true)
+        @test (r.sample.panel, r.sample.unbalanced, r.sample.units, g7(r), [pair(r.effects, :event_time, e) for e in (-2, 0, 3)],
+            pair(r.cohorts, :cohort, 7), overall(r), rounded.((r.pretrends.statistic, r.pretrends.p))) ==
+            ("unbalanced", 30, 60, [(-0.036976, 0.098616), (1.992345, 0.175577)],
+            [(0.009354, 0.046908), (0.494376, 0.195853), (0.923948, 0.235085)], (2.007894, 0.186063),
+            [(1.404524, 0.181402), (1.869985, 0.119509), (1.031342, 0.230267), (1.319576, 0.139607)], (12.940849, 0.531186))
+        r = estimate(gaps; unbalanced = true, control = "notyet", base_period = "universal", covariates = ["x"], weights = "w", cluster = "region")
+        @test (g7(r), [pair(r.effects, :event_time, e) for e in (-2, 0, 3)], overall(r)) ==
+            ([(-0.018657, 0.042311), (1.92571, 0.079773)], [(0.019522, 0.034192), (0.450209, 0.138436), (0.914768, 0.143759)],
+            [(1.368598, 0.103154), (1.827711, 0.075404), (1.00824, 0.130123), (1.277964, 0.07789)])
+        @test (overall(estimate(gaps; unbalanced = true, method = "ipw", covariates = ["x"], weights = "w")),
+            overall(estimate(gaps; unbalanced = true, method = "reg", base_period = "universal", covariates = ["x"])),
+            overall(estimate(gaps; unbalanced = true, covariates = ["x"], weights = "w"))) ==
+            ([(1.386177, 0.182736), (1.852435, 0.11517), (1.016488, 0.237549), (1.294934, 0.136935)],
+            [(1.396577, 0.175305), (1.860592, 0.106522), (1.025287, 0.224483), (1.314424, 0.134898)],
+            [(1.374499, 0.164888), (1.831807, 0.091594), (1.013483, 0.216803), (1.284355, 0.121288)])
+        # Without unbalanced the units with gaps are left out; with it, a balanced panel is as before
+        @test ((s = estimate(gaps).sample; (s.panel, s.unbalanced, s.units)),
+            (b = estimate(STAGGERED; unbalanced = true); (b.sample.panel, isequal(b.overall, estimate(STAGGERED).overall)))) ==
+            (("balanced", 30, 30), ("balanced", true))
+
+        # The multiplier bootstrap, against did's (bstrap = TRUE, cband = TRUE, biters = 100000): its standard errors
+        # and simultaneous critical values, within the noise of the draws
+        boot = estimate(STAGGERED; bootstrap = true, draws = 20000, seed = 1)
+        c = boot.sample.critical
+        @test all(isapprox.((c.cells, c.effects, c.cohorts, c.calendar), (2.797, 2.747, 2.319, 2.511); atol = 0.05))
+        @test all(isapprox.((pair(boot.effects, :event_time, 0)[2], boot.overall.se[2], boot.overall.se[3]),
+            (0.1886, 0.1138, 0.2297); rtol = 0.03))
+        @test isapprox(boot.effects.high[1] - boot.effects.effect[1], c.effects * boot.effects.se[1]) && round(c.overall; digits = 6) == 1.959964
+        @test boot.cells.effect == estimate(STAGGERED).cells.effect &&
+            boot.effects.se == estimate(STAGGERED; bootstrap = true, draws = 20000, seed = 1).effects.se
+        @test_throws ArgumentError estimate(STAGGERED; uniform = true)
     end
 end

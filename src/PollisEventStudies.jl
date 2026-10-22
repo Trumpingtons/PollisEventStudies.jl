@@ -13,14 +13,20 @@ instrument's contract, unit and scale at each release) and `prices/` (a file per
 contract). For each period: each instrument's move at each release, the mean move with its cross-sectional t, and the
 mean move a minute at a time.
 
+A panel event study (`source = "panel"`) has a table of units over time, first treated at different times: the effects
+by event time from two-way fixed effects and from Sun and Abraham (2021), each cohort's, and the tests of pre-trends.
+`panel_event_study` takes any Tables.jl table, as does `callaway_santanna`, for Callaway and Sant'Anna's (2021) effects
+of each cohort at each time and their aggregations.
+
     results = run_study("~/.pollis/event-studies/my-study")
 """
 module PollisEventStudies
 
-using CSV, Tables, TOML, Dates, Statistics, Printf
-using Distributions: TDist, ccdf
+using CSV, Tables, TOML, Dates, Statistics, Printf, LinearAlgebra
+import Random
+using Distributions: TDist, FDist, Normal, Chisq, ccdf, quantile
 
-export read_study, analyse, report, write_results, run_study, instrument_move
+export read_study, analyse, report, write_results, run_study, instrument_move, panel_event_study, callaway_santanna
 
 # A minute's bar is complete a little after it ends
 const SETTLE = Minute(2)
@@ -86,6 +92,7 @@ The study in `folder`: its settings and the events with a ticker and an acceptan
 """
 function read_study(folder::AbstractString = pwd())
     settings = TOML.parsefile(joinpath(folder, "study.toml"))
+    get(settings, "source", "filings") == "panel" && return read_panel_study(folder, settings)
     fomc = get(settings, "source", "filings") == "fomc"
     periods = [Period(get(p, "name", "Period $k"), get(p, "before", 30), get(p, "after", 120), get(p, "next_open", false))
                for (k, p) in enumerate(get(settings, "periods", Dict{String, Any}[]))]
@@ -678,6 +685,10 @@ function write_results(results::Vector{FomcResult}, folder::AbstractString)
     end
     files
 end
+
+include("bootstrap.jl")
+include("panel.jl")
+include("callaway.jl")
 
 heading(study::Study) = string(study.title, ": benchmark ", study.benchmark, ", ",
     study.market_model ? "market model on the $(study.estimation_days) trading days before" : "market-adjusted", "; ",

@@ -63,6 +63,137 @@ For each period of a study of FOMC releases:
 
 `write_results` writes them to `<period>-moves.csv`, `<period>-summary.csv` and `<period>-paths.csv`.
 
+## Panel event studies
+
+Units of a panel first treated at different times, such as firms adopting a rule, states passing a law or hospitals
+joining a stepped-wedge trial, against units not yet or never treated:
+
+```julia
+results = panel_event_study(table; unit = "state", time = "year", outcome = "y", cohort = "first_treated",
+    leads = 5, lags = 5)
+report(results)
+```
+
+`table` is any Tables.jl table, a row a unit and a time, with times in whole numbers (years, or quarters or months
+numbered). When each unit was first treated comes from `cohort`, a column of that time (missing or 0 for never), or from
+`treatment`, the first time its column is not zero. Event times run from `-leads` to `lags` against `reference` (-1);
+those beyond the ends count at the ends. Units treated from the first time are left out.
+
+- **Two-way fixed effects** (TWFE): the outcome on unit and time effects and an indicator of each event time. With
+  effects that differ from cohort to cohort, its effects mix in those of other event times, before treatment too.
+- **Sun and Abraham (2021)**: each cohort's effect at each event time against the control units (`control = "never"`,
+  the units never treated, or `"last"`, the units treated last, before their treatment), averaged over the cohorts
+  with their shares of the event time's observations.
+
+Standard errors are clustered by `cluster` (the unit by default), with Stata's small-sample factor unless
+`small_sample = false`. p-values and the 95% bands come from t with the clusters less one degrees of freedom
+(`distribution = "t"`, as Stata and fixest) or from the normal (`distribution = "normal"`, as did). Sun and Abraham's variance adds that of the
+cohorts' shares, clustered, unless `fixed_shares = true` holds them fixed. Each result has the effects by event time (`effects`), each cohort's (`cohorts`), the Wald
+tests that the effects before treatment are zero (F under t, chi-squared under the normal) (`pretrends`) and the sample. `weights` weighs the observations, and
+`covariates` are added to both regressions.
+
+To compare with R:
+
+| R | Keywords |
+|---|---|
+| fixest, `sunab` and `i()` | `fixed_shares = true` |
+| did, `att_gt` (units never treated, universal base period) and `aggte(type = "dynamic")` | `small_sample = false, distribution = "normal"` (did's `bstrap = FALSE, cband = FALSE`) |
+
+On a test panel with weights, a covariate and clusters coarser than the units, the cohorts' effects, the TWFE
+effects, the effects by event time and their standard errors are those of fixest to 6 decimals; on one without, the
+effects by event time and their standard errors, the variance of the shares included, their p-values and their 95% bands are those of did to 6 decimals. Stata's eventstudyinteract takes the
+shares' variance observation by observation.
+
+With `uniform = true`, the 95% bands of each estimator's effects are simultaneous: they cover all the event times
+together 95% of the time, as an event-study plot needs. The critical value is the sup-t of Montiel Olea and
+Plagborg-Moller (2019): the 95% quantile of the largest |t| over the event times, drawn (`draws`, 10,000 by default;
+`seed` to repeat them) from the effects' correlations, normal or Student's t as `distribution`. The report gives each
+estimator's. On the test panel, 2.777 for Sun and Abraham's 16 event times under the normal, between the pointwise
+1.960 and Bonferroni's 2.955. With `multiplier = true`, the critical value comes from did's multiplier bootstrap
+instead, on each cluster's influence on the effects, each weighed by +1 or -1 in each draw: 2.706 with 200,000 draws,
+against did's 2.708. Over 60 clusters, weights of +1 or -1 give the largest |t| thinner tails than normal draws do.
+
+With few clusters, clustered standard errors are unreliable. With `wild = true`, after `using WildBootTests`, each
+effect also has the p-value of the wild cluster bootstrap (Cameron, Gelbach and Miller 2008; Roodman, MacKinnon, Nielsen
+and Webb 2019), with the null imposed, and its 95% interval by inverting the test, and the pre-trends test has its own
+p-value. Each draw weighs each cluster's residuals by +1 or -1 (`wild_weights = "rademacher"`, every pattern of signs
+when there are no more than `draws`) or by Webb's six values (`"webb"`, better with fewer than about 12 clusters). Sun and
+Abraham's effects hold the cohorts' shares fixed. The bootstrap runs in David Roodman's
+[WildBootTests.jl](https://github.com/droodman/WildBootTests.jl) (MIT), loaded only when asked for. Against R's
+fwildclusterboot (`boottest` on fixest's models), with 12 clusters and so all 4,096 patterns of signs, the p-values are
+equal to 6 decimals; the intervals' bounds differ by up to 0.0005, both programs stopping on the step of the p-value
+past the bound (TWFE's upper bound at event time 3: 1.158875, R 1.158985, WildBootTests 1.159517).
+
+A study folder with `source = "panel"` in `study.toml` names the table (`data`, `panel.csv` by default), the same
+keywords and the estimators, `panel_event_study` (the default), `callaway_santanna` (below) or both, whose own keywords
+go in a `[callaway_santanna]` table:
+
+```toml
+title = "Minimum wage"
+source = "panel"
+data = "panel.csv"
+unit = "state"
+time = "year"
+outcome = "y"
+cohort = "first_treated"
+leads = 5
+lags = 5
+estimators = ["panel_event_study", "callaway_santanna"]
+
+[callaway_santanna]
+control = "notyet"
+method = "dr"
+```
+
+`run_study` reports each and writes `panel-effects.csv`, `panel-cohorts.csv` and `panel-pretrends.csv`, and the
+`cs-*.csv` files of Callaway and Sant'Anna.
+
+### Callaway and Sant'Anna (2021)
+
+Each cohort's effect at each time, ATT(g, t), a difference in differences against the control units, and its
+aggregations:
+
+```julia
+results = callaway_santanna(table; unit = "state", time = "year", outcome = "y", cohort = "first_treated",
+    control = "notyet", covariates = ["x"])
+report(results)
+write_results(results, "results")   # cs-cells.csv, cs-effects.csv, cs-cohorts.csv, cs-calendar.csv, cs-overall.csv, cs-pretrends.csv
+```
+
+- `control`: `"never"`, `"notyet"` (never treated and not yet treated), `"last"` (never treated and the cohort treated
+  last, before its treatment) or `"auto"` (`"never"` when there are units never treated, else `"last"`).
+- `base_period`: `"varying"` (the time before, for the cells before treatment) or `"universal"` (the last time before
+  the cohort's treatment for all).
+- `method`: `"dr"`, doubly robust (Sant'Anna and Zhao 2020), `"ipw"` or `"reg"`, with `covariates` taken at the earlier
+  of the two times.
+- `anticipation`, the times before its treatment a cohort may respond; `weights` and `cluster` as above.
+
+The cells are aggregated by event time (from `-leads` to `lags`; `balance = e` keeps the cohorts seen e times after
+treatment), by cohort, by calendar time and overall, weighed by the cohorts' sizes, the standard errors counting the
+estimation of those weights. Standard errors come from the influence functions, clustered, and the test of pre-trends
+is the Wald test that the cells before treatment are zero (none when their covariance is singular, as in did).
+
+The code is a port of R's [did](https://github.com/bcallaway11/did) (`att_gt`, `aggte`) and of
+[DRDID](https://github.com/pedrohcgs/DRDID) (`drdid_panel`, `std_ipw_did_panel`, `reg_did_panel`). With
+`distribution = "normal"`, against did's `bstrap = FALSE, cband = FALSE`, on the test panel, with and without units
+never treated: the cells, the effects by event time, by cohort and by calendar time, the overall averages, their
+standard errors and the test of pre-trends are those of did to 6 decimals, for each control group, base period and
+method, with weights, a covariate, coarser clusters, anticipation, `min_e`/`max_e` (`leads`/`lags`) and `balance_e`
+(`balance`).
+
+With `bootstrap = true`, the standard errors come from did's multiplier bootstrap (`draws`, 1000 by default, each
+weighing each cluster's influence by +1 or -1; `seed` to repeat them), and the 95% bands of the cells and of the effects
+by event time, cohort and time are simultaneous (`uniform`, did's `cband`): they cover all of a table's rows together
+95% of the time, as an event-study plot needs. The report gives each table's critical value. Against did with 100,000
+draws, the critical values and standard errors agree within the noise of the draws (2.743 and 2.747 for the event times).
+Units observed at only some times are left out, as in did, unless `unbalanced = true` (did's
+`allow_unbalanced_panel`): each ATT(g, t) then compares the observations at t and at the base period as repeated cross
+sections, with DRDID's `drdid_rc`, `std_ipw_did_rc` and `reg_did_rc`, each observation with its own covariates and
+weight, and a unit's influence is the sum of its observations'. On a panel where half the units miss a year or two, it
+agrees with did to 6 decimals in five configurations (each method, the not-yet-treated control, a universal base period,
+weights, a covariate and coarser clusters). `panel_event_study` needs no option: its regression takes every observation,
+and it agrees with fixest on the same panel.
+
 ## License
 
 MIT
