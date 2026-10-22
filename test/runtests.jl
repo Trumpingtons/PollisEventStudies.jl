@@ -1,4 +1,4 @@
-using PollisEventStudies, Test, Random, Dates, CSV, Tables, WildBootTests
+using PollisEventStudies, Test, Random, Dates, CSV, Tables, WildBootTests, MixedModels
 
 const BENCHMARK = "^GSPC"
 const DAYS = Date.(2026, 10, [12, 13, 14, 15, 16, 19, 20])
@@ -539,5 +539,69 @@ GAPS = map(c -> c[[(i = parse(Int, STAGGERED.unit[k][2:end]); isodd(i) || mod(7i
         @test boot.cells.effect == estimate(STAGGERED).cells.effect &&
             boot.effects.se == estimate(STAGGERED; bootstrap = true, draws = 20000, seed = 1).effects.se
         @test_throws ArgumentError estimate(STAGGERED; uniform = true)
+    end
+
+    @testset "stepped wedge" begin
+        data(name) = CSV.File(joinpath(@__DIR__, "data", name))
+        example, aggregated, growing = data("sw_data_example.csv"), data("sw_binomial.csv"), data("sw_growing.csv")
+        design = (; cluster = "cluster", time = "period", treatment = "trt")
+        estimate(table; options...) = (r = stepped_wedge(table; design..., options...); [r.estimate, r.se])
+
+        # R's steppedwedge 1.0.0, analyze(method = "mixed"): its simulated sw_data_example (15 clusters, 5 sequences, 6
+        # times), and a simulation of 18 clusters over 7 times whose effect grows with exposure time, where the immediate
+        # treatment's effect is a third of the effects averaged over exposure times. The gaussian fits by REML
+        @test isapprox(reduce(vcat, [estimate(example; outcome = "outcome_cont"),
+                estimate(example; outcome = "outcome_cont", effect = "ETI"),
+                estimate(example; outcome = "outcome_cont", effect = "ETI", estimand = "PTE", exposure = 3),
+                estimate(growing; outcome = "outcome"),
+                estimate(growing; outcome = "outcome", effect = "ETI"),
+                estimate(growing; outcome = "outcome", effect = "ETI", estimand = "PTE", exposure = 4),
+                estimate(growing; outcome = "outcome", effect = "ETI", exposure = 2:5)]),
+            [0.0224086364381, 0.0741506876685, 0.0227260030266, 0.100722230828, -0.00517471111625, 0.117536641257,
+                0.181421239158, 0.119627433432, 0.693272368616, 0.173459935563, 0.711445276615, 0.214323424958,
+                0.753238974406, 0.171839087731]; atol = 1e-6)
+        # The binomial fits by the Laplace approximation, of the 0 or 1 outcome and of the successes out of trials at
+        # each cluster and time, which have the same likelihood (R's aggregated fit stops further from its maximum, so
+        # both are compared with its fit of the 0 or 1 outcome), and the effect heterogeneous by exposure time. Where the
+        # likelihood is flat, as with a variance near zero, R stops sooner, with a likelihood no higher than here; the
+        # standard error of a PTE under TEH is that of the exposure time asked for (R's that of the one before)
+        binomial = (; outcome = "successes", trials = "trials", family = "binomial")
+        @test isapprox(reduce(vcat, [estimate(example; outcome = "outcome_bin", family = "binomial"),
+                estimate(aggregated; binomial...),
+                estimate(example; outcome = "outcome_bin", family = "binomial", effect = "ETI"),
+                estimate(aggregated; binomial..., effect = "ETI"),
+                estimate(example; outcome = "outcome_bin", family = "binomial", effect = "ETI", estimand = "PTE", exposure = 3),
+                estimate(growing; outcome = "outcome", effect = "TEH"),
+                estimate(growing; outcome = "outcome", effect = "TEH", estimand = "PTE", exposure = 4)]),
+            [-0.189080063912, 0.132038210054, -0.189080063912, 0.132038210054, -0.183811820439, 0.159154613978,
+                -0.183811820439, 0.159154613978, -0.304864523009, 0.19836704033, 0.524479642319, 0.185010235514,
+                0.551594974196, 0.220107543027]; atol = 5e-5)
+        @test_throws ArgumentError estimate(example; outcome = "outcome_cont", estimand = "PTE")
+        @test_throws ArgumentError estimate(example; outcome = "outcome_cont", trials = "trt")
+
+        # A study folder: the clusters are the units, and a TATE's exposure times [first, last]
+        folder = mktempdir()
+        cp(joinpath(@__DIR__, "data", "sw_growing.csv"), joinpath(folder, "panel.csv"))
+        write(joinpath(folder, "study.toml"), """
+            title = "Growing"
+            source = "panel"
+            unit = "cluster"
+            time = "period"
+            treatment = "trt"
+            outcome = "outcome"
+            estimators = ["stepped_wedge"]
+
+            [stepped_wedge]
+            effect = "ETI"
+            exposure = [2, 5]
+            """)
+        output = mktemp() do path, io
+            redirect_stdout(() -> run_study(folder), io)
+            close(io)
+            read(path, String)
+        end
+        @test (occursin("Stepped wedge: 2520 observations of 18 clusters over 7 times, 6 sequences; gaussian; exposure time indicators (ETI)", output),
+            occursin("TATE (exposure times 2 to 5): 0.753, se 0.172, 95% interval 0.416 to 1.090", output),
+            sort(readdir(joinpath(folder, "results")))) == (true, true, ["sw-effects.csv", "sw-estimate.csv"])
     end
 end

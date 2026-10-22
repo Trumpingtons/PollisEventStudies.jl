@@ -3,8 +3,10 @@
 """
 A panel event study's folder: `study.toml` (`source = "panel"`) names the table (`data`, a CSV in the folder by
 default `panel.csv`), its columns and the event times, as the keywords of `panel_event_study`, and the estimators
-(`estimators`, "panel_event_study" and "callaway_santanna"; the first by default). A `[callaway_santanna]` table holds
-the keywords of `callaway_santanna` that differ from the others, such as its control units.
+(`estimators`, "panel_event_study", "callaway_santanna" and "stepped_wedge"; the first by default). A
+`[callaway_santanna]` table holds the keywords of `callaway_santanna` that differ from the others, such as its control
+units, and a `[stepped_wedge]` table those of `stepped_wedge`, such as its effect; its clusters are `cluster`, or else
+`unit`, and a TATE's exposure times are given as `exposure = [first, last]`.
 """
 struct PanelStudy
     folder::String
@@ -13,6 +15,7 @@ struct PanelStudy
     estimators::Vector{String}
     options::Dict{Symbol, Any}
     callaway_options::Dict{Symbol, Any}
+    stepped_wedge_options::Dict{Symbol, Any}
 end
 
 const PANEL_OPTIONS = (:unit, :time, :outcome, :cohort, :treatment, :cluster, :weights, :covariates, :leads, :lags,
@@ -22,7 +25,10 @@ const PANEL_OPTIONS = (:unit, :time, :outcome, :cohort, :treatment, :cluster, :w
 const CALLAWAY_OPTIONS = (:unit, :time, :outcome, :cohort, :treatment, :cluster, :weights, :covariates, :leads, :lags,
     :control, :distribution, :base_period, :method, :anticipation, :balance, :unbalanced, :bootstrap, :draws, :uniform, :seed)
 
-const PANEL_ESTIMATORS = ("panel_event_study", "callaway_santanna")
+const STEPPED_WEDGE_OPTIONS = (:cluster, :time, :treatment, :outcome, :trials, :individual, :effect, :estimand, :exposure,
+    :family)
+
+const PANEL_ESTIMATORS = ("panel_event_study", "callaway_santanna", "stepped_wedge")
 
 function read_panel_study(folder, settings)
     data = get(settings, "data", "panel.csv")
@@ -37,20 +43,34 @@ function read_panel_study(folder, settings)
         Symbol(key) in CALLAWAY_OPTIONS || throw(ArgumentError("[callaway_santanna]: \"$key\" is not a keyword of callaway_santanna"))
         callaway[Symbol(key)] = value
     end
+    wedge = Dict{Symbol, Any}(Symbol(key) => value for (key, value) in settings if Symbol(key) in STEPPED_WEDGE_OPTIONS)
+    haskey(wedge, :cluster) || !haskey(settings, "unit") || (wedge[:cluster] = settings["unit"])
+    for (key, value) in get(settings, "stepped_wedge", Dict{String, Any}())
+        Symbol(key) in STEPPED_WEDGE_OPTIONS || throw(ArgumentError("[stepped_wedge]: \"$key\" is not a keyword of stepped_wedge"))
+        wedge[Symbol(key)] = value
+    end
+    exposure = get(wedge, :exposure, nothing)
+    if exposure isa AbstractVector
+        length(exposure) == 2 && all(e -> e isa Integer, exposure) ||
+            throw(ArgumentError("[stepped_wedge]: exposure is a whole number or [first, last], not $exposure"))
+        wedge[:exposure] = exposure[1]:exposure[2]
+    end
     PanelStudy(folder, get(settings, "title", basename(folder)), isabspath(data) ? data : joinpath(folder, data),
-        unique(estimators), options, callaway)
+        unique(estimators), options, callaway, wedge)
 end
 
 """
     analyse(study::PanelStudy)
 
-The panel event study of the table in the study's folder by each of its estimators, as `panel_event_study` and
-`callaway_santanna` with the keywords of its `study.toml`: a result each, in the order of `estimators`.
+The panel event study of the table in the study's folder by each of its estimators, as `panel_event_study`,
+`callaway_santanna` and `stepped_wedge` (after `using MixedModels`) with the keywords of its `study.toml`: a result
+each, in the order of `estimators`.
 """
 function analyse(study::PanelStudy; now = nothing)
     table = CSV.File(study.data)
-    Union{PanelResult, CallawaySantAnnaResult}[e == "panel_event_study" ? panel_event_study(table; study.options...) :
-        callaway_santanna(table; study.callaway_options...) for e in study.estimators]
+    PanelStudyResult[e == "panel_event_study" ? panel_event_study(table; study.options...) :
+        e == "callaway_santanna" ? callaway_santanna(table; study.callaway_options...) :
+        stepped_wedge(table; study.stepped_wedge_options...) for e in study.estimators]
 end
 
 """A panel event study's results: the sample, the effects by event time, each cohort's, and the tests of pre-trends."""

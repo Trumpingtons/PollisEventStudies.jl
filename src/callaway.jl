@@ -537,8 +537,3 @@ function write_results(result::CallawaySantAnnaResult, folder::AbstractString)
             ("cs-calendar.csv", result.calendar), ("cs-overall.csv", result.overall),
             ("cs-pretrends.csv", map(x -> [x], result.pretrends)))]
 end
-
-# A panel study's results, one for each estimator
-report(io::IO, results::Vector{Union{PanelResult, CallawaySantAnnaResult}}) = foreach(r -> report(io, r), results)
-write_results(results::Vector{Union{PanelResult, CallawaySantAnnaResult}}, folder::AbstractString) =
-    reduce(vcat, [write_results(r, folder) for r in results])

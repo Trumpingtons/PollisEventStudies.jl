@@ -125,8 +125,8 @@ equal to 6 decimals; the intervals' bounds differ by up to 0.0005, both programs
 past the bound (TWFE's upper bound at event time 3: 1.158875, R 1.158985, WildBootTests 1.159517).
 
 A study folder with `source = "panel"` in `study.toml` names the table (`data`, `panel.csv` by default), the same
-keywords and the estimators, `panel_event_study` (the default), `callaway_santanna` (below) or both, whose own keywords
-go in a `[callaway_santanna]` table:
+keywords and the estimators, `panel_event_study` (the default), `callaway_santanna` and `stepped_wedge` (below), any of
+them, whose own keywords go in a `[callaway_santanna]` or a `[stepped_wedge]` table:
 
 ```toml
 title = "Minimum wage"
@@ -194,9 +194,59 @@ agrees with did to 6 decimals in five configurations (each method, the not-yet-t
 weights, a covariate and coarser clusters). `panel_event_study` needs no option: its regression takes every observation,
 and it agrees with fixest on the same panel.
 
+### Stepped wedges
+
+When the times clusters start a treatment are drawn at random, a stepped-wedge cluster randomized trial, the mixed
+model of Hussey and Hughes (2007): a fixed effect for each time, a random intercept for each cluster and one for each
+cluster at each time. After `using MixedModels`:
+
+```julia
+using MixedModels
+result = stepped_wedge(table; cluster = "clinic", time = "period", treatment = "trt", outcome = "y", effect = "ETI")
+result.estimate, result.se, result.interval   # the effect averaged over exposure times (TATE)
+result.by_exposure                              # the effect at each exposure time
+```
+
+- `effect`: `"IT"`, one effect at every exposure time (the time since the cluster's first treatment, plus 1); `"ETI"`,
+  an effect at each exposure time; `"TEH"`, a random effect at each exposure time about a mean effect. When the effect
+  grows with exposure time, IT's estimate can be far from the average effect (Kenny et al. 2022): in the test
+  simulation, 0.18 against ETI's 0.69.
+- `estimand`: `"TATE"`, the effects averaged over the exposure times `exposure` (a range, all by default), or `"PTE"`,
+  the effect at exposure time `exposure`.
+- `family`: `"gaussian"` (REML, as lme4's `lmer`) or `"binomial"` (Laplace, as `glmer`), of a 0 or 1 outcome or of
+  successes out of `trials`; `individual` adds a random intercept for each person.
+
+The result also has the standard deviations of the random effects, the intracluster correlation of a gaussian model and
+the fitted MixedModels.jl model; `report` prints it and `write_results` writes `sw-effects.csv` (by exposure time) and
+`sw-estimate.csv`. In a study folder, `estimators = ["stepped_wedge"]`; the clusters are `cluster`, or else `unit`, and
+a TATE's exposure times go in the `[stepped_wedge]` table as `exposure = [2, 5]`:
+
+```toml
+source = "panel"
+unit = "clinic"
+time = "period"
+treatment = "trt"
+outcome = "y"
+estimators = ["stepped_wedge"]
+
+[stepped_wedge]
+effect = "ETI"
+exposure = [2, 5]
+```
+
+The code is a port of the mixed-model part of R's
+[steppedwedge](https://cran.r-project.org/package=steppedwedge) 1.0.0 (`analyze(method = "mixed")`, calendar time
+categorical), fitted by [MixedModels.jl](https://github.com/JuliaStats/MixedModels.jl) (MIT), loaded only when asked
+for. On steppedwedge's simulated example and on a simulation whose effect grows with exposure time, the gaussian IT and
+ETI estimates and standard errors are those of R within 1e-6. The binomial fits and TEH are within 5e-5: where a
+variance is near zero the likelihood is flat and R stops sooner, at a likelihood no higher than here
+(-1376.65973195 against -1376.65973191). Under TEH, the standard error of a PTE takes the conditional variance of the
+exposure time asked for; steppedwedge takes that of the exposure time before it (0.220108 against R's 0.213374 at
+exposure time 4).
+
 ## Vignette
 
-[Market Event Studies: filings and FOMC releases, a minute at a time](vignette/PollisEventStudies.pdf)
+[Event Studies: a filing's minutes, a law's years](vignette/PollisEventStudies.pdf)
 
 ## License
 

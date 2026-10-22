@@ -36,8 +36,9 @@
 \begin{document}
 
 \nmhead{Event studies}
-  {Market Event Studies: filings and FOMC releases, a minute at a time}
-  {How did the market take an 8-K, or the Fed's statement, in the minutes after it came out?}
+  {Event Studies: a filing's minutes, a law's years}
+  {How did the market take an 8-K, or the Fed's statement, in the minutes after it came out? And what did a rule, a law
+   or a rollout change, period by period, where it came first?}
 
 \factsheet
   {\menupath{Compose \gt Workflows \gt Event Studies}: studies of the filings an alert on SEC filings fires, and of the
@@ -45,22 +46,61 @@
    they come in, and writes a \fn{study.ipynb} that runs the package.}
   {intraday event studies from minute bars: periods measured in minutes, the next open for a filing outside the session,
    trading that is not every minute, and the moves of rate futures at a release. The Julia event-study code we compared
-   works on daily returns.}
+   works on daily returns. Also the stepped-wedge mixed model with effects by exposure time, which R's steppedwedge
+   has.}
   {\fn{PollisEventStudies.jl}, registered in PollisRegistry: \fn{run\_study("path/to/study")}.}
-  {60 tests on synthetic studies whose answers are known, built minute by minute; no published table yet (see Still open).}
+  {116 tests: synthetic studies whose answers are known, built minute by minute, and the panel estimators against R's
+   fixest, did, fwildclusterboot and steppedwedge; no published intraday table yet (see Still open).}
 
 \nmsection{Why a package}
 The packages in Pollis so far each came from a replication: a paper, its data and its printed results. This one comes
 from a feature: Pollis watches EDGAR and the Federal Reserve, and an event study turns an alert's filings into evidence.
 The analysis has to live somewhere that a notebook, a test suite and other researchers can all reach.
 
-\nmsub{Two kinds of event studies}
-\emph{Market event studies} (\nmcite{ffjr1969}{Fama, Fisher, Jensen and Roll 1969}; \nmcite{mackinlay1997}{MacKinlay
-1997}) compare each security's return around an event with a model of its normal return, and need no control group.
-\emph{Panel event studies} follow an outcome of units treated at different dates against units not yet treated or never
-treated, period by period before and after (\nmcite{sun2021}{Sun and Abraham 2021}); they serve finance, policy
-evaluation and health studies alike. This document is about the first. The second is to come, in this package, from
-the same menu item.
+\nmsub{Where event studies are used}
+An event reaches each unit at a date of its own, and the question is what changed after it, period by period.
+\begin{itemize}
+  \item \textbf{Finance: a company's news, firms under a new rule.} The minutes after a filing or the Fed's statement,
+    the subject of the first part of this document; and the years after a rule reaches some firms first, such as the
+    business combination laws that states passed one after another from the mid-1980s, shielding the firms
+    incorporated in them from takeovers (\nmcite{bm2003}{Bertrand and Mullainathan 2003}).
+  \item \textbf{Policy: states passing a law.} The expansion of Medicaid under the Affordable Care Act, adopted by some
+    states in 2014 and by others later or not at all, and the mortality of the near-elderly low-income adults it
+    covered (\nmcite{mjw2021}{Miller, Johnson and Wherry 2021}).
+  \item \textbf{Health: sites joining a programme.} Hospitals or clinics switch to a new treatment or protocol a group at
+    a time, in an order drawn at random: the stepped-wedge cluster randomized trial (\nmcite{hh2007}{Hussey and Hughes
+    2007}).
+  \item \textbf{Education: districts reforming school finance.} Court-ordered reforms changed school spending in
+    different states in different years, and the children in school after them were followed into adulthood
+    (\nmcite{jjp2016}{Jackson, Johnson and Persico 2016}).
+  \item \textbf{Technology: a product reaching one market after another.} Facebook opened to US colleges one after
+    another from 2004, and students' mental health worsened after it arrived (\nmcite{blm2022}{Braghieri, Levy and
+    Makarin 2022}).
+\end{itemize}
+
+\nmsub{Three designs}
+What stands in for the outcome without the event tells them apart; the estimators follow from it.
+\begin{itemize}
+  \item \textbf{A model of the normal outcome, no control units.} The market event study
+    (\nmcite{ffjr1969}{Fama, Fisher, Jensen and Roll 1969}; \nmcite{mackinlay1997}{MacKinlay 1997}): each security's
+    return around the event against a model of its normal return, estimated before it. It needs an event sharp enough,
+    and a window short enough, for nothing else to move the price. Its counterpart in health is the interrupted time
+    series, a segmented regression of one series before and after an intervention (\nmcite{lcg2017}{Lopez Bernal,
+    Cummins and Gasparrini 2017}), which this package does not have. The first part of this document.
+  \item \textbf{Control units, timing not drawn at random.} The panel event study, or dynamic difference-in-differences:
+    units treated at different dates against units not yet or never treated, under parallel trends (without the
+    treatment, the treated units' outcomes would have moved as the controls' did). The policy, education and technology
+    examples above are of this kind, and so are observational health studies of a rollout. Two-way fixed effects with
+    an indicator of each event time, and the estimators of \nmcite{sun2021}{Sun and Abraham (2021)} and
+    \nmcite{cs2021}{Callaway and Sant'Anna (2021)}: the second part, from Panel event studies on.
+  \item \textbf{Control units, timing drawn at random.} The stepped-wedge trial makes the same comparison, but the order
+    is drawn at random, so parallel trends hold by design rather than by assumption. Its usual analysis is a mixed model
+    with an effect of each period and a random effect of each cluster (\nmcite{hh2007}{Hussey and Hughes 2007}), which
+    takes the full effect from the first period of treatment; when the effect grows with the time on treatment, that
+    model is biased, as two-way fixed effects are (\nmcite{kvxhh2022}{Kenny et al. 2022}). The estimators of the second
+    part remain valid under random timing, and \nmcite{rs2023}{Roth and Sant'Anna (2023)} give the most efficient ones
+    under it. The package fits the mixed model too, with Kenny et al.'s effects by exposure time: Stepped wedges, below.
+\end{itemize}
 
 \nmsection{The data}
 A study is a folder: \fn{study.toml} (the benchmark, \fn{\^{}GSPC} by default; the model; the estimation days, 5 by
@@ -417,6 +457,53 @@ Against did 2.5.1 with \fn{allow\_unbalanced\_panel = TRUE}, in five configurati
 control, a universal base period, weights, a covariate and coarser clusters), the cells, the effects by event time, by
 cohort and overall, their standard errors and the pre-trends test are equal to 6 decimals.
 
+\nmsection{Stepped wedges}
+In a stepped-wedge trial every cluster starts the treatment, each at a time drawn at random. \fn{stepped\_wedge}, after
+\fn{using MixedModels}, fits the mixed model of \nmcite{hh2007}{Hussey and Hughes (2007)}: a fixed effect for each time,
+a random intercept for each cluster, and one for each cluster at each time, so that outcomes in a cluster are more alike
+at the same time than at different times. A treated observation's exposure time is the time since its cluster's first
+treatment, plus 1.
+
+\begingroup\footnotesize
+\begin{verbatim}
+using MixedModels
+result = stepped_wedge(table; cluster = "clinic", time = "period", treatment = "trt",
+    outcome = "y", effect = "ETI")
+\end{verbatim}
+\endgroup
+
+\begin{itemize}
+  \item \fn{effect = "IT"}, immediate treatment: one effect at every exposure time, the model of Hussey and Hughes;
+  \item \fn{"ETI"}, exposure time indicators: an effect at each exposure time (\nmcite{kvxhh2022}{Kenny et al. 2022});
+  \item \fn{"TEH"}, treatment effect heterogeneity: a random effect at each exposure time about a mean effect.
+\end{itemize}
+The estimand is the TATE, the effects averaged over a range of exposure times (all by default), or a PTE, the effect at
+one exposure time. Gaussian outcomes are fitted by REML, binary ones, or successes out of trials, by the Laplace
+approximation; the result also has the effects by exposure time, the standard deviations of the random effects and,
+for a gaussian outcome, the intracluster correlation. The model runs in MixedModels.jl, which the package loads only when
+asked for. In a study folder, \fn{estimators = ["stepped\_wedge"]} in \fn{study.toml}, with the keywords in a
+\fn{[stepped\_wedge]} table (a TATE's exposure times as \fn{exposure = [2, 5]}), and \fn{run\_study} writes
+\fn{sw-effects.csv} and \fn{sw-estimate.csv}.
+
+When the effect grows with exposure time, IT's single effect mixes the early, small effects with the later ones and can
+be far from their average. In the test simulation, 18 clusters over 7 times whose effect rises from 0.2 at exposure
+time 1 to 1.0 at 6, an average of 0.683:
+\begin{valuetable}{@{}lll@{}}
+\textbf{Effect} & \textbf{TATE} & \textbf{Standard error}\\\midrule
+IT & 0.181 & 0.120\\
+ETI & 0.693 & 0.173\\
+TEH & 0.524 & 0.185\\
+\end{valuetable}
+
+\nmsub{Against R}
+The code is a port of the mixed-model part of R's steppedwedge 1.0.0 (\fn{analyze(method = "mixed")}, calendar time
+categorical). On steppedwedge's simulated example (15 clusters, 5 sequences, 6 times) and on the simulation above, the
+gaussian IT and ETI estimates and standard errors are R's within $10^{-6}$. The binomial fits and TEH are within
+$5\times10^{-5}$: a variance near zero, as that of the clusters at a time often is, leaves the likelihood flat there,
+and R stops sooner, at a likelihood no higher than here ($-1376.65973195$ against $-1376.65973191$). Under TEH, the
+standard error of a PTE takes the conditional variance of the exposure time asked for; steppedwedge takes that of the
+exposure time before it (0.220108 against R's 0.213374 at exposure time 4).
+
 \nmsection{Still open}
 \begin{itemize}
   \item \textbf{A published table.} Every test is synthetic. The package needs an intraday study whose events and
@@ -430,16 +517,24 @@ cohort and overall, their standard errors and the pre-trends test are equal to 6
 
 \nmsection{References}
 {\footnotesize
+\nmref{bm2003}{Bertrand, M. and Mullainathan, S. (2003). Enjoying the quiet life? Corporate governance and managerial preferences. \emph{Journal of Political Economy} 111(5), 1043--1075. \nmdoi{10.1086/376950}}
 \nmref{bmp1991}{Boehmer, E., Musumeci, J. and Poulsen, A.\,B. (1991). Event-study methodology under conditions of event-induced variance. \emph{Journal of Financial Economics} 30(2), 253--272. \nmdoi{10.1016/0304-405X(91)90032-F}}
+\nmref{blm2022}{Braghieri, L., Levy, R. and Makarin, A. (2022). Social media and mental health. \emph{American Economic Review} 112(11), 3660--3693. \nmdoi{10.1257/aer.20211218}}
 \nmref{cs2021}{Callaway, B. and Sant'Anna, P.\,H.\,C. (2021). Difference-in-differences with multiple time periods. \emph{Journal of Econometrics} 225(2), 200--230.\newline \nmdoi{10.1016/j.jeconom.2020.12.001}}
 \nmref{cgm2008}{Cameron, A.\,C., Gelbach, J.\,B. and Miller, D.\,L. (2008). Bootstrap-based improvements for inference with clustered errors. \emph{Review of Economics and Statistics} 90(3), 414--427. \nmdoi{10.1162/rest.90.3.414}}
 \nmref{ffjr1969}{Fama, E.\,F., Fisher, L., Jensen, M.\,C. and Roll, R. (1969). The adjustment of stock prices to new information. \emph{International Economic Review} 10(1), 1--21.}
+\nmref{hh2007}{Hussey, M.\,A. and Hughes, J.\,P. (2007). Design and analysis of stepped wedge cluster randomized trials. \emph{Contemporary Clinical Trials} 28, 182--191. \nmdoi{10.1016/j.cct.2006.05.007}}
+\nmref{jjp2016}{Jackson, C.\,K., Johnson, R.\,C. and Persico, C. (2016). The effects of school spending on educational and economic outcomes: evidence from school finance reforms. \emph{Quarterly Journal of Economics} 131(1), 157--218. \nmdoi{10.1093/qje/qjv036}}
+\nmref{kvxhh2022}{Kenny, A., Voldal, E.\,C., Xia, F., Heagerty, P.\,J. and Hughes, J.\,P. (2022). Analysis of stepped wedge cluster randomized trials in the presence of a time-varying treatment effect. \emph{Statistics in Medicine} 41(22), 4311--4339. \nmdoi{10.1002/sim.9511}}
 \nmref{kp2010}{Kolari, J.\,W. and Pynn\"onen, S. (2010). Event study testing with cross-sectional correlation of abnormal returns. \emph{Review of Financial Studies} 23(11), 3996--4025. \nmdoi{10.1093/rfs/hhq072}}
 \nmref{kp2011}{Kolari, J.\,W. and Pynn\"onen, S. (2011). Nonparametric rank tests for event studies. \emph{Journal of Empirical Finance} 18(5), 953--971.\newline \nmdoi{10.1016/j.jempfin.2011.08.003}}
 \nmref{kuttner2001}{Kuttner, K.\,N. (2001). Monetary policy surprises and interest rates: evidence from the Fed funds futures market. \emph{Journal of Monetary Economics} 47(3), 523--544. \nmdoi{10.1016/S0304-3932(01)00055-1}}
+\nmref{lcg2017}{Lopez Bernal, J., Cummins, S. and Gasparrini, A. (2017). Interrupted time series regression for the evaluation of public health interventions: a tutorial. \emph{International Journal of Epidemiology} 46(1), 348--355. \nmdoi{10.1093/ije/dyw098}}
 \nmref{mackinlay1997}{MacKinlay, A.\,C. (1997). Event studies in economics and finance. \emph{Journal of Economic Literature} 35(1), 13--39.}
+\nmref{mjw2021}{Miller, S., Johnson, N. and Wherry, L.\,R. (2021). Medicaid and mortality: new evidence from linked survey and administrative data. \emph{Quarterly Journal of Economics} 136(3), 1783--1829. \nmdoi{10.1093/qje/qjab004}}
 \nmref{mop2019}{Montiel Olea, J.\,L. and Plagborg-M\o{}ller, M. (2019). Simultaneous confidence bands: Theory, implementation, and an application to SVARs. \emph{Journal of Applied Econometrics} 34(1), 1--17. \nmdoi{10.1002/jae.2656}}
 \nmref{rmnw2019}{Roodman, D., MacKinnon, J.\,G., Nielsen, M.\,\O{}. and Webb, M.\,D. (2019). Fast and wild: Bootstrap inference in Stata using boottest. \emph{Stata Journal} 19(1), 4--60. \nmdoi{10.1177/1536867X19830877}}
+\nmref{rs2023}{Roth, J. and Sant'Anna, P.\,H.\,C. (2023). Efficient estimation for staggered rollout designs. \emph{Journal of Political Economy Microeconomics} 1(4), 669--709. \nmdoi{10.1086/726581}}
 \nmref{sz2020}{Sant'Anna, P.\,H.\,C. and Zhao, J. (2020). Doubly robust difference-in-differences estimators. \emph{Journal of Econometrics} 219(1), 101--122.\newline \nmdoi{10.1016/j.jeconom.2020.06.003}}
 \nmref{sun2021}{Sun, L. and Abraham, S. (2021). Estimating dynamic treatment effects in event studies with heterogeneous treatment effects. \emph{Journal of Econometrics} 225(2), 175--199. \nmdoi{10.1016/j.jeconom.2020.09.006}}
 \nmref{webb2023}{Webb, M.\,D. (2023). Reworking wild bootstrap-based inference for clustered errors. \emph{Canadian Journal of Economics} 56(3), 839--858. \nmdoi{10.1111/caje.12661}}

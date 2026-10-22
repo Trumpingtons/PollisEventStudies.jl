@@ -16,7 +16,8 @@ mean move a minute at a time.
 A panel event study (`source = "panel"`) has a table of units over time, first treated at different times: the effects
 by event time from two-way fixed effects and from Sun and Abraham (2021), each cohort's, and the tests of pre-trends.
 `panel_event_study` takes any Tables.jl table, as does `callaway_santanna`, for Callaway and Sant'Anna's (2021) effects
-of each cohort at each time and their aggregations.
+of each cohort at each time and their aggregations. `stepped_wedge`, after `using MixedModels`, takes a table of a
+stepped-wedge cluster randomized trial, for the mixed model of Hussey and Hughes (2007) with the effects by exposure time.
 
     results = run_study("~/.pollis/event-studies/my-study")
 """
@@ -26,7 +27,8 @@ using CSV, Tables, TOML, Dates, Statistics, Printf, LinearAlgebra
 import Random
 using Distributions: TDist, FDist, Normal, Chisq, ccdf, quantile
 
-export read_study, analyse, report, write_results, run_study, instrument_move, panel_event_study, callaway_santanna
+export read_study, analyse, report, write_results, run_study, instrument_move, panel_event_study, callaway_santanna,
+    stepped_wedge
 
 # A minute's bar is complete a little after it ends
 const SETTLE = Minute(2)
@@ -689,6 +691,7 @@ end
 include("bootstrap.jl")
 include("panel.jl")
 include("callaway.jl")
+include("steppedwedge.jl")
 
 heading(study::Study) = string(study.title, ": benchmark ", study.benchmark, ", ",
     study.market_model ? "market model on the $(study.estimation_days) trading days before" : "market-adjusted", "; ",
