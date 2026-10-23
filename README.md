@@ -173,9 +173,13 @@ treatment), by cohort, by calendar time and overall, weighed by the cohorts' siz
 estimation of those weights. Standard errors come from the influence functions, clustered, and the test of pre-trends
 is the Wald test that the cells before treatment are zero (none when their covariance is singular, as in did).
 
+p-values and 95% bands come from the normal, as did, the authors' own package (`distribution = "normal"`, the
+default), or from Student's t with the clusters less one degrees of freedom (`distribution = "t"`), wider with few
+clusters.
+
 The code is a port of R's [did](https://github.com/bcallaway11/did) (`att_gt`, `aggte`) and of
-[DRDID](https://github.com/pedrohcgs/DRDID) (`drdid_panel`, `std_ipw_did_panel`, `reg_did_panel`). With
-`distribution = "normal"`, against did's `bstrap = FALSE, cband = FALSE`, on the test panel, with and without units
+[DRDID](https://github.com/pedrohcgs/DRDID) (`drdid_panel`, `std_ipw_did_panel`, `reg_did_panel`). With the normal
+(the default), against did's `bstrap = FALSE, cband = FALSE`, on the test panel, with and without units
 never treated: the cells, the effects by event time, by cohort and by calendar time, the overall averages, their
 standard errors and the test of pre-trends are those of did to 6 decimals, for each control group, base period and
 method, with weights, a covariate, coarser clusters, anticipation, `min_e`/`max_e` (`leads`/`lags`) and `balance_e`

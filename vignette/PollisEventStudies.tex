@@ -335,8 +335,9 @@ report(results)
     time, ATT$(g, t)$, a difference in differences against the units never treated, not yet treated or treated last;
     from a varying or a universal base period; doubly robust (Sant'Anna and Zhao \nmcite{sz2020}{2020}), by inverse
     probability weighting or by outcome regression, with covariates; then aggregated by event time, by cohort, by
-    calendar time and overall, the standard errors counting the estimation of the cohorts' shares. It is a port of
-    R's did and DRDID.
+    calendar time and overall, the standard errors counting the estimation of the cohorts' shares. Its p-values and
+    95\% bands come from the normal, as did (\fn{distribution = "normal"}, the default), or from Student's t with
+    $G-1$ degrees of freedom (\fn{"t"}). It is a port of R's did and DRDID.
 \end{itemize}
 Each result of \fn{panel\_event\_study} has the effects by event time, each cohort's, the pre-trends test (that the effects before the reference
 event time are all zero) and the sample. \fn{weights} weighs the observations and \fn{covariates} are added to both

@@ -32,7 +32,7 @@ end
 """
     callaway_santanna(table; unit, time, outcome, cohort = nothing, treatment = nothing, cluster = unit,
         weights = nothing, covariates = String[], control = "auto", base_period = "varying", method = "dr",
-        anticipation = 0, leads = nothing, lags = nothing, balance = nothing, unbalanced = false, distribution = "t",
+        anticipation = 0, leads = nothing, lags = nothing, balance = nothing, unbalanced = false, distribution = "normal",
         bootstrap = false, draws = 1000, uniform = bootstrap, seed = nothing)
 
 Callaway and Sant'Anna's (2021) effects of a treatment that units of a panel start at different times. For each cohort
@@ -63,10 +63,11 @@ seen e times after their treatment), by cohort and by calendar time, each weighe
 standard errors count the estimation of the weights. `lags` also bounds the cells averaged by cohort and overall.
 
 Standard errors come from the influence functions, clustered by `cluster`, without a small-sample factor. p-values and
-95% bands come from Student's t with the clusters less one degrees of freedom (`distribution = "t"`) or from the normal
-(`distribution = "normal"`), and the test of pre-trends is F or chi-squared; there is none, as in did, when the
-covariance of the cells before treatment is singular (more of them than clusters). With `distribution = "normal"`, the
-estimates, standard errors, p-values and bands are those of R's did with `bstrap = FALSE, cband = FALSE`.
+95% bands come from the normal (`distribution = "normal"`, the default, as did, the authors' R package) or from
+Student's t with the clusters less one degrees of freedom (`distribution = "t"`, wider with few clusters), and the test
+of pre-trends is chi-squared or F; there is none, as in did, when the covariance of the cells before treatment is
+singular (more of them than clusters). The estimates, standard errors, p-values and bands are those of R's did with
+`bstrap = FALSE, cband = FALSE`.
 
 With `bootstrap = true`, the standard errors come from did's multiplier bootstrap instead: `draws` times, each
 cluster's influence is weighed by +1 or -1 at random, and the standard error is the interquartile range of the draws
@@ -80,7 +81,7 @@ function callaway_santanna(table; unit, time, outcome, cohort = nothing, treatme
         weights = nothing, covariates = String[], control::AbstractString = "auto",
         base_period::AbstractString = "varying", method::AbstractString = "dr", anticipation::Integer = 0,
         leads = nothing, lags = nothing, balance = nothing, unbalanced::Bool = false,
-        distribution::AbstractString = "t", bootstrap::Bool = false,
+        distribution::AbstractString = "normal", bootstrap::Bool = false,
         draws::Integer = 1000, uniform::Bool = bootstrap, seed = nothing)
     (cohort === nothing) == (treatment === nothing) &&
         throw(ArgumentError("name the column of the time each unit is first treated (cohort) or of its treatment (treatment), one of the two"))
