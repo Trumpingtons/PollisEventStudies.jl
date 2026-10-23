@@ -466,8 +466,10 @@ pre-trends (`panel-pretrends.csv`) to `folder`; returns the files.
 """
 function write_results(result::PanelResult, folder::AbstractString)
     mkpath(folder)
-    [CSV.write(joinpath(folder, name), table) for (name, table) in
-        (("panel-effects.csv", result.effects), ("panel-cohorts.csv", result.cohorts), ("panel-pretrends.csv", result.pretrends))]
+    [CSV.write(joinpath(folder, name), table) for (name, table) in result_tables(result)]
 end
+
+result_tables(result::PanelResult) =
+    ["panel-effects.csv" => result.effects, "panel-cohorts.csv" => result.cohorts, "panel-pretrends.csv" => result.pretrends]
 
 heading(study::PanelStudy) = string(study.title, ": panel event study of ", basename(study.data))

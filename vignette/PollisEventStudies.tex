@@ -42,8 +42,9 @@
 
 \factsheet
   {\menupath{Compose \gt Workflows \gt Event Studies}: studies of the filings an alert on SEC filings fires, and of the
-   FOMC's releases. Pollis captures the minute prices into \fn{\textasciitilde/.pollis/event-studies}, draws the CAAR as
-   they come in, and writes a \fn{study.ipynb} that runs the package.}
+   FOMC's releases, and panel event studies. Pollis captures the minute prices into
+   \fn{\textasciitilde/.pollis/event-studies}, and the page shows what the package computes from them as they come in;
+   a \fn{study.ipynb} in each study's folder runs the same package, to export, cite and reproduce.}
   {intraday event studies from minute bars: periods measured in minutes, the next open for a filing outside the session,
    trading that is not every minute, and the moves of rate futures at a release. The Julia event-study code we compared
    works on daily returns. Also the stepped-wedge mixed model with effects by exposure time, which R's steppedwedge
@@ -264,6 +265,11 @@ In Julia, \fn{results = analyse(read\_study(folder))} gives the same, a named tu
 \fn{report(results)} prints them and \fn{write\_results(results, folder)} writes them.
 
 \nmsection{The notebook}
+The Event Studies page computes nothing itself. It asks PollisEventStudies.jl, in a hidden Julia process with an
+environment of its own (the user's are never touched), for each study's results and draws them: the CAR of each event, the CAAR with its band, abnormal volume and volatility, why an event was left out,
+and the tests. The notebook is the optional export: the same package on the same folder, with the results written to
+files, which makes a study citable and reproducible without Pollis.
+
 Each study folder has a \fn{study.ipynb} that Pollis writes when the study is made, a Julia notebook in four parts:
 \begin{enumerate}
   \item \textbf{What the folder holds}: \fn{study.toml}, \fn{events.csv}, \fn{prices/} and \fn{news/} (the articles
@@ -278,7 +284,11 @@ Each study folder has a \fn{study.ipynb} that Pollis writes when the study is ma
 \end{enumerate}
 Events still capturing prices count up to the last complete minute, so running the notebook again as they come in
 brings the results up to date. A study of FOMC releases has its own notebook, with the instruments, the contract
-months, Kuttner's scaling and \fn{results[1].moves}.
+months, Kuttner's scaling and \fn{results[1].moves}. So does a panel event study, made on the same page from a CSV
+table (Kind: Panel Event Study), which Pollis copies into the folder as \fn{panel.csv}: its notebook runs the estimators
+\fn{study.toml} names (adding MixedModels.jl for the stepped wedge) and writes \fn{results/}. The page draws the same
+effects by event time, pre-trends tests, Callaway and Sant'Anna's averages and stepped wedge's estimate, which it gets
+from the package, not from \fn{results/}.
 
 \nmsection{What the tests show}
 Three synthetic filings over seven trading days, with known betas, jumps and volume; one filed after Friday's close.
@@ -616,6 +626,7 @@ the single number of TWFE, $-3.08$, averages a growing effect with comparisons o
 (\fn{cs.overall}, simple) is $-10.22$ (3.09), did's to the digits shown, against
 the 5 states never treated, the only clean controls, which is why its standard errors stay large.
 
+\newpage
 \nmsection{Still open}
 \begin{itemize}
   \item \textbf{A published intraday table.} The panel estimators match a published table (the minimum wage, above);
@@ -624,8 +635,6 @@ the 5 states never treated, the only clean controls, which is why its standard e
   \item \textbf{Estimation days.} Pollis captures them for the market model only, so market-adjusted studies have no
     standardized tests (BMP, its adjustment and the generalized rank test) unless the prices before the period happen
     to be there.
-  \item \textbf{Panel Event Studies in Pollis.} The package has them; the Event Studies page and a notebook for them
-    are still to come.
 \end{itemize}
 
 \nmsection{References}

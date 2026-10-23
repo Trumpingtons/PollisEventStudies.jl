@@ -34,12 +34,12 @@ write_results(results, "results")
 
 For each period:
 
-- the average abnormal return (AAR) and the cumulative average abnormal return (CAAR) a minute at a time, from the filing and, for filings outside the regular session, from the next open, each with its cross-sectional t;
-- at the end of the period: the CAR's cross-sectional t, the Boehmer, Musumeci and Poulsen (1991) t on standardized CARs, the same t adjusted for the correlation of the events' abnormal returns (Kolari and Pynn&ouml;nen 2010), the generalized rank test (Kolari and Pynn&ouml;nen 2011), and abnormal volume (regular-session minutes after the filing against those before it), each with its two-sided p-value.
+- the average abnormal return (AAR) and the cumulative average abnormal return (CAAR) a minute at a time, from the filing and, for filings outside the regular session, from the next open, each with its cross-sectional t and the CAAR's 95% band (`caar_lower`, `caar_upper`, where there are two events or more), and each event's CAR a minute at a time (`curves`, and `open_curves` from the next open);
+- at the end of the period: the CAR's cross-sectional t, the Boehmer, Musumeci and Poulsen (1991) t on standardized CARs, the same t adjusted for the correlation of the events' abnormal returns (Kolari and Pynn&ouml;nen 2010), the generalized rank test (Kolari and Pynn&ouml;nen 2011), Cowan's (1992) generalized sign test, the Wilcoxon signed-rank test, abnormal volume (regular-session minutes after the filing against those before it) and abnormal volatility (the log of the realized volatility of the minute abnormal returns after the filing over that of as many regular-session minutes before it), each with its two-sided p-value.
 
 A filing outside the regular session, in a period that follows the next open, is tested at the end of the period's minutes after the next open, where the market first trades on it. Events still capturing prices count up to the last complete minute. The standardized CARs need the estimation days, which Pollis captures for the market model only.
 
-The adjustment for cross-correlation multiplies the BMP t by sqrt((1 - r) / (1 + (n - 1) r)), r the mean correlation over all pairs of the n events: the correlation of a pair's standardized abnormal returns over the estimation minutes they share when their periods overlap, and zero when they do not. The generalized rank test ranks each event's standardized CAR, scaled by the CARs' cross-sectional standard deviation, among its standardized abnormal returns on the estimation days. The p-values come from Student's t distribution, through [Distributions.jl](https://github.com/JuliaStats/Distributions.jl).
+The adjustment for cross-correlation multiplies the BMP t by sqrt((1 - r) / (1 + (n - 1) r)), r the mean correlation over all pairs of the n events: the correlation of a pair's standardized abnormal returns over the estimation minutes they share when their periods overlap, and zero when they do not. The generalized rank test ranks each event's standardized CAR, scaled by the CARs' cross-sectional standard deviation, among its standardized abnormal returns on the estimation days. The generalized sign test sets how many CARs are positive against how many the share of positive abnormal returns on the estimation days leads one to expect; the Wilcoxon signed-rank test, by [HypothesisTests.jl](https://github.com/JuliaStats/HypothesisTests.jl), sums the ranks of the positive CARs among their absolute values. Both rest on signs and ranks rather than means, for heavy-tailed returns and few events. The p-values of the t tests come from Student's t distribution, that of the sign test from the normal, through [Distributions.jl](https://github.com/JuliaStats/Distributions.jl).
 
 The same for groups of the events, with `group_by = "form"`, `"item"` (each 8-K item; a filing with several is in the group of each), `"session"` (during the regular session or outside it), `"ticker"`, or a function of the event that gives a group's name or several, in `study.toml` or as a keyword:
 
@@ -59,7 +59,7 @@ For each period of a study of FOMC releases:
 
 - each instrument's move from the start of the period to its end at each release (`moves`, a release a row): in basis points of the implied rate (100 less the price) for the federal funds and SOFR futures, of the yield for the yields, and in per cent (log) for prices; FF1's move is scaled by D / (D - d), D the days of the release's month and d its day (Kuttner 2001), and in the month's last week FF2's contract stands in for it, unscaled;
 - the mean move of each instrument with its cross-sectional t (`summary`);
-- the mean move a minute at a time from the release (`paths`, by instrument).
+- the mean move a minute at a time from the release, with its 95% band (`paths`, by instrument), and each release's (`curves`, by instrument).
 
 `write_results` writes them to `<period>-moves.csv`, `<period>-summary.csv` and `<period>-paths.csv`.
 
@@ -218,7 +218,8 @@ result.by_exposure                              # the effect at each exposure ti
 
 The result also has the standard deviations of the random effects, the intracluster correlation of a gaussian model and
 the fitted MixedModels.jl model; `report` prints it and `write_results` writes `sw-effects.csv` (by exposure time) and
-`sw-estimate.csv`. In a study folder, `estimators = ["stepped_wedge"]`; the clusters are `cluster`, or else `unit`, and
+`sw-estimate.csv`. `PollisEventStudies.result_tables(result)` gives the tables `write_results` writes for any of the
+panel estimators' results, each with its file's name, without writing them. In a study folder, `estimators = ["stepped_wedge"]`; the clusters are `cluster`, or else `unit`, and
 a TATE's exposure times go in the `[stepped_wedge]` table as `exposure = [2, 5]`:
 
 ```toml

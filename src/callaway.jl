@@ -532,8 +532,9 @@ calendar time (`cs-calendar.csv`), the overall averages (`cs-overall.csv`) and t
 """
 function write_results(result::CallawaySantAnnaResult, folder::AbstractString)
     mkpath(folder)
-    [CSV.write(joinpath(folder, name), table) for (name, table) in
-        (("cs-cells.csv", result.cells), ("cs-effects.csv", result.effects), ("cs-cohorts.csv", result.cohorts),
-            ("cs-calendar.csv", result.calendar), ("cs-overall.csv", result.overall),
-            ("cs-pretrends.csv", map(x -> [x], result.pretrends)))]
+    [CSV.write(joinpath(folder, name), table) for (name, table) in result_tables(result)]
 end
+
+result_tables(result::CallawaySantAnnaResult) = ["cs-cells.csv" => result.cells, "cs-effects.csv" => result.effects,
+    "cs-cohorts.csv" => result.cohorts, "cs-calendar.csv" => result.calendar, "cs-overall.csv" => result.overall,
+    "cs-pretrends.csv" => map(x -> [x], result.pretrends)]

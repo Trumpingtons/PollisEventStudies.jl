@@ -1,12 +1,13 @@
 name = "PollisEventStudies"
 uuid = "5ed72046-19de-49b5-a33c-d4f6124ce44a"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Antonio Saragga Seabra"]
 
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+HypothesisTests = "09f84164-cd44-5f33-b23f-e6b0d136a0d5"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
@@ -26,6 +27,7 @@ PollisEventStudiesWildBootTestsExt = "WildBootTests"
 CSV = "0.10, 1"
 Dates = "1"
 Distributions = "0.25"
+HypothesisTests = "0.11, 0.12"
 LinearAlgebra = "1"
 MixedModels = "4.36"
 Printf = "1"

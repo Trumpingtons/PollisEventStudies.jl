@@ -220,18 +220,30 @@ the files.
 """
 function write_results(result::SteppedWedgeResult, folder::AbstractString)
     mkpath(folder)
+    [CSV.write(joinpath(folder, name), table) for (name, table) in result_tables(result)]
+end
+
+function result_tables(result::SteppedWedgeResult)
     value(x) = something(x, missing)
     sd = result.sd
     estimate = (; effect = [result.effect], estimand = [result.estimand], exposure = [string(result.exposure)],
         estimate = [result.estimate], se = [result.se], low = [result.interval[1]], high = [result.interval[2]],
         sd_cluster = [sd.cluster], sd_cluster_time = [sd.cluster_time], sd_individual = [value(sd.individual)],
         sd_exposure = [value(sd.exposure)], sd_residual = [value(sd.residual)], icc = [value(result.icc)])
-    [CSV.write(joinpath(folder, name), table) for (name, table) in
-        (("sw-effects.csv", result.by_exposure), ("sw-estimate.csv", estimate))]
+    ["sw-effects.csv" => result.by_exposure, "sw-estimate.csv" => estimate]
 end
 
 # A panel study's result by one of its estimators, and its results, one for each estimator
 const PanelStudyResult = Union{PanelResult, CallawaySantAnnaResult, SteppedWedgeResult}
+
+"""
+    result_tables(result)
+
+The tables of a panel study's result by one of its estimators, each with the name of the file `write_results` writes
+it to: `panel-effects.csv`, `cs-overall.csv`, `sw-estimate.csv` and so on.
+"""
+result_tables
+
 report(io::IO, results::Vector{PanelStudyResult}) = foreach(r -> report(io, r), results)
 write_results(results::Vector{PanelStudyResult}, folder::AbstractString) =
     reduce(vcat, [write_results(r, folder) for r in results])

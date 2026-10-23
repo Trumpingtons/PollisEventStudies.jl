@@ -175,12 +175,16 @@ GAPS = map(c -> c[[(i = parse(Int, STAGGERED.unit[k][2:end]); isodd(i) || mod(7i
         @test isfinite(default.tests.grank_t) && 0 <= default.tests.grank_p <= 1
         # Five times the volume for the first 60 of the 120 minutes: log(5) / 2
         @test abs(default.tests.abnormal_volume - log(5) / 2) < 0.1
+        # The jump in the minute after the filing raises the abnormal returns' realized volatility over the next 120 minutes
+        @test default.events.abnormal_volatility[1] > 0.4 && default.tests.abnormal_volatility_events == 3
+        @test default.tests.gsign_events == 3 && 0 <= default.tests.gsign_p <= 1 && 0 <= default.tests.wilcoxon_p <= 1
         # A period that does not follow the next open has no curve from it
         @test results[2].from_open === nothing
 
         files = write_results(results, joinpath(folder, "results"))
-        @test basename.(files) == ["default-events.csv", "default-from-the-filing.csv", "default-from-the-next-open.csv", "short-run-events.csv", "short-run-from-the-filing.csv"]
-        @test length(CSV.File(files[2])) == 30 + 120 + 1
+        @test basename.(files) == ["default-events.csv", "default-outcomes.csv", "default-from-the-filing.csv", "default-from-the-next-open.csv",
+            "short-run-events.csv", "short-run-outcomes.csv", "short-run-from-the-filing.csv"]
+        @test length(CSV.File(files[3])) == 30 + 120 + 1
 
         output = sprint(report, results)
         @test occursin("Minutes from the next open, 1 events", output)
@@ -203,6 +207,47 @@ GAPS = map(c -> c[[(i = parse(Int, STAGGERED.unit[k][2:end]); isodd(i) || mod(7i
         default = analyse(read_study(synthetic_study(mktempdir(); events = [thin])))[1]
         @test abs(default.events.beta[1] - 1.0) < 0.25
         @test default.tests.bmp_events == 1
+    end
+
+    @testset "sign and signed-rank tests" begin
+        P = PollisEventStudies
+        # Two of four estimation returns positive: half the CARs are expected positive, and three of four are
+        cowan = P.generalized_sign([(car = car, sars = [1.0, -1.0, 2.0, -2.0]) for car in [1.0, 2.0, 3.0, -1.0]])
+        @test cowan == (z = 1.0, positive = 3)
+        # With one event, no z, as the cross-sectional t and EventStudy's GeneralizedSignTest
+        one = P.generalized_sign([(car = 1.0, sars = [1.0, -1.0])])
+        @test ismissing(one.z) && one.positive == 1
+        # R's wilcox.test(x, y, paired = TRUE) of its own example, exact: V = 40, p = 0.03906
+        x = [1.83, 0.50, 1.62, 2.48, 1.68, 1.88, 1.55, 3.06, 1.30]
+        y = [0.878, 0.647, 0.598, 2.05, 1.06, 1.29, 1.06, 3.14, 1.29]
+        exact = P.signed_rank(x .- y)
+        @test exact.v == 40 && round(exact.p; digits = 5) == 0.03906
+        # Sixty values, two of them zero and the others tied in pairs: R's normal approximation, V = 1340, p = 0.0001777228713
+        z = [-1; repeat(-0.9:0.1:1.9; inner = 2); 2]
+        tied = P.signed_rank(z)
+        @test tied.v == 1340 && round(tied.p; sigdigits = 8) == round(0.0001777228713; sigdigits = 8)
+    end
+
+    @testset "outcomes" begin
+        day = DateTime(DAYS[1])
+        events = [
+            # Its prices file has no bars for the ticker in events.csv
+            merge(EVENTS[1], (accession = "E4",)),
+            # Ten minutes after the first open: the period starts before the first bar
+            merge(EVENTS[3], (accession = "E5", accepted = day + Hour(14) + Minute(40))),
+            # 45 minutes after the first open: the 14 minutes before the period are too few for the market model
+            merge(EVENTS[3], (accession = "E6", accepted = day + Hour(15) + Minute(15))),
+            EVENTS[3]]
+        folder = synthetic_study(mktempdir(); events)
+        path = joinpath(folder, "events.csv")
+        write(path, replace(read(path, String), "E4,1,\"Company AAA, Inc.\",AAA" => "E4,1,\"Company AAA, Inc.\",ZZZ"))
+        default = analyse(read_study(folder))[1]
+        @test (default.outcomes.accession, default.outcomes.outcome, default.outcomes.notes) == (["E4", "E5", "E6", "E3"],
+            ["no_stock_prices", "no_start_price", "used", "used"], ["", "", "market_adjusted no_scar", ""])
+        @test default.events.accession == ["E6", "E3"] && default.tests.bmp_events == 1
+        output = sprint(report, [default])
+        @test occursin("2 events with prices\n  left out, no price at the start of the period: 1\n  left out, no prices for the stock: 1\n" *
+            "  market-adjusted: too few estimation minutes to fit the market model: 1\n", output)
     end
 
     @testset "Kolari and Pynnonen" begin
